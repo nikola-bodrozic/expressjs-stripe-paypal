@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon index.js",
+    "start": "nodemon stripe.js",
     "test": "jest"
   },
   "keywords": [],
@@ -19,7 +19,8 @@
     "express": "^4.21.1",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "morgan-body": "^2.6.9"
+    "morgan-body": "^2.6.9",
+    "stripe": "^20.3.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
