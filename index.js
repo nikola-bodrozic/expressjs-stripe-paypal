@@ -90,6 +90,91 @@ async function getPayPalAccessToken() {
   }
 }
 
+// Helper function to detect country from IP
+async function detectCountryFromIP(ip) {
+  try {
+    const response = await axios.get(`https://ipapi.co/${ip}/country_code/`, {
+      timeout: 5000,
+    });
+    return response.data.trim();
+  } catch (error) {
+    console.error("Error detecting country:", error.message);
+    return "";
+  }
+}
+
+// Helper function to get client IP
+function getClientIp(req) {
+  const xForwardedFor = req.headers["x-forwarded-for"];
+  if (xForwardedFor) {
+    return xForwardedFor.split(",")[0].trim();
+  }
+  return req.ip || req.connection.remoteAddress;
+}
+
+// Helper function to get shipping options based on country
+function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
+  // European countries
+  const europeanCountries = [
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
+    "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
+  ];
+
+  let sortedShippingOptions = [];
+  
+  if (detectedCountry === "GB") {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["AU"] },
+      { shipping_rate: shippingRateIds["CA"] },
+    ];
+  } else if (europeanCountries.includes(detectedCountry)) {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["AU"] },
+      { shipping_rate: shippingRateIds["CA"] },
+    ];
+  } else if (detectedCountry === "US") {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["AU"] },
+      { shipping_rate: shippingRateIds["CA"] },
+    ];
+  } else if (detectedCountry === "AU") {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["AU"] },
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["CA"] },
+    ];
+  } else if (detectedCountry === "CA") {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["CA"] },
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["AU"] },
+    ];
+  } else {
+    sortedShippingOptions = [
+      { shipping_rate: shippingRateIds["GB"] },
+      { shipping_rate: shippingRateIds["EU"] },
+      { shipping_rate: shippingRateIds["US"] },
+      { shipping_rate: shippingRateIds["AU"] },
+      { shipping_rate: shippingRateIds["CA"] },
+    ];
+  }
+  
+  return sortedShippingOptions;
+}
+
 // CORS configuration
 const allowedOrigins = [
   "http://localhost:5173",
@@ -122,6 +207,9 @@ app.use(cookieParser());
 // Handle preflight requests
 app.options("*", cors(corsOptions));
 
+// ========================
+// HEALTH & INFO ENDPOINTS
+// ========================
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "ok", 
@@ -222,7 +310,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
           },
         ],
         application_context: {
-          return_url: `${config.FRONT_END_HOST}/success-pp.php`, // Updated to success-pp.php
+          return_url: `${config.FRONT_END_HOST}/success-pp.php`,
           cancel_url: `${config.FRONT_END_HOST}/cancel.php`,
           brand_name: config.STORE_NAME,
           user_action: "PAY_NOW",
@@ -277,69 +365,108 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
 });
 
 // ========================
-// STRIPE ENDPOINTS
+// STRIPE ENDPOINTS (RESTful)
 // ========================
-// GET endpoint: Get all products
-app.get("/api", async (req, res) => {
+// GET all products with prices
+app.get("/api/stripe/products", async (req, res) => {
   try {
-    if (req.query.action === "get_all_products") {
-      const prices = await stripe.prices.list({
-        expand: ["data.product"],
-      });
+    const prices = await stripe.prices.list({
+      expand: ["data.product"],
+    });
 
-      const activePrices = prices.data.filter(
-        (price) => price.active && price.product.active,
-      );
+    const activePrices = prices.data.filter(
+      (price) => price.active && price.product.active,
+    );
 
-      const products = activePrices.map((price) => {
-        const imgFileName = price.product.metadata?.imgFileName || "";
+    const products = activePrices.map((price) => {
+      const imgFileName = price.product.metadata?.imgFileName || "";
 
-        return {
-          id: price.id,
-          price: price.unit_amount / 100,
-          currency: price.currency.toUpperCase(),
-          description: price.product.description,
-          imgFileName: imgFileName,
-        };
-      });
-      res.json(products);
-    } else if (req.query.action === "get_session" && req.query.session_id) {
-      const session = await stripe.checkout.sessions.retrieve(
-        req.query.session_id,
-        {
-          expand: ["line_items.data.price.product", "payment_intent"],
-        },
-      );
-      res.json(session);
-    } else {
-      res.status(400).json({ error: "Invalid action" });
-    }
+      return {
+        id: price.id,
+        price: price.unit_amount / 100,
+        currency: price.currency.toUpperCase(),
+        description: price.product.description,
+        imgFileName: imgFileName,
+        productId: price.product.id,
+        productName: price.product.name,
+        productDescription: price.product.description,
+        productMetadata: price.product.metadata,
+        billingScheme: price.billing_scheme,
+        type: price.type,
+        recurring: price.recurring,
+      };
+    });
+    
+    res.json({
+      success: true,
+      count: products.length,
+      data: products
+    });
   } catch (error) {
-    console.error("GET Error:", error.message);
-    res.status(400).json({ error: error.message });
+    console.error("Stripe products error:", error.message);
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to fetch products",
+      details: error.message 
+    });
   }
 });
 
-// Helper function to detect country from IP
-async function detectCountryFromIP(ip) {
+// GET single product by price ID
+app.get("/api/stripe/products/:priceId", async (req, res) => {
   try {
-    const response = await axios.get(`https://ipapi.co/${ip}/country_code/`, {
-      timeout: 5000,
+    const { priceId } = req.params;
+    
+    const price = await stripe.prices.retrieve(priceId, {
+      expand: ["product"],
     });
-    return response.data.trim();
-  } catch (error) {
-    console.error("Error detecting country:", error.message);
-    return "";
-  }
-}
 
-// POST endpoint: Create Stripe checkout session
-app.post("/api", async (req, res) => {
+    if (!price.active || !price.product.active) {
+      return res.status(404).json({
+        success: false,
+        error: "Product not found or inactive"
+      });
+    }
+
+    const product = {
+      id: price.id,
+      price: price.unit_amount / 100,
+      currency: price.currency.toUpperCase(),
+      description: price.product.description,
+      imgFileName: price.product.metadata?.imgFileName || "",
+      productId: price.product.id,
+      productName: price.product.name,
+      productDescription: price.product.description,
+      productMetadata: price.product.metadata,
+      billingScheme: price.billing_scheme,
+      type: price.type,
+      recurring: price.recurring,
+    };
+    
+    res.json({
+      success: true,
+      data: product
+    });
+  } catch (error) {
+    console.error("Stripe product error:", error.message);
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to fetch product",
+      details: error.message 
+    });
+  }
+});
+
+// Create Stripe checkout session
+app.post("/api/stripe/create-session", async (req, res) => {
   try {
     const { items, email } = req.body;
 
     if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: "Invalid or missing items data" });
+      return res.status(400).json({ 
+        success: false,
+        error: "Invalid or missing items data" 
+      });
     }
 
     // Validate items
@@ -374,15 +501,7 @@ app.post("/api", async (req, res) => {
       CA: config.CA,
     };
 
-    // Get client IP
-    const getClientIp = (req) => {
-      const xForwardedFor = req.headers["x-forwarded-for"];
-      if (xForwardedFor) {
-        return xForwardedFor.split(",")[0].trim();
-      }
-      return req.ip || req.connection.remoteAddress;
-    };
-
+    // Detect country from IP
     const ip = getClientIp(req);
     let detectedCountry = "";
     try {
@@ -391,64 +510,14 @@ app.post("/api", async (req, res) => {
       console.warn("Could not detect country:", error.message);
     }
 
-    // European countries
+    // Get shipping options
+    const sortedShippingOptions = getShippingOptionsForCountry(detectedCountry, shippingRateIds);
+
+    // European countries for allowed shipping
     const europeanCountries = [
       "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
       "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
     ];
-
-    // Sort shipping options according to country
-    let sortedShippingOptions = [];
-    if (detectedCountry === "GB") {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["AU"] },
-        { shipping_rate: shippingRateIds["CA"] },
-      ];
-    } else if (europeanCountries.includes(detectedCountry)) {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["AU"] },
-        { shipping_rate: shippingRateIds["CA"] },
-      ];
-    } else if (detectedCountry === "US") {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["AU"] },
-        { shipping_rate: shippingRateIds["CA"] },
-      ];
-    } else if (detectedCountry === "AU") {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["AU"] },
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["CA"] },
-      ];
-    } else if (detectedCountry === "CA") {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["CA"] },
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["AU"] },
-      ];
-    } else {
-      sortedShippingOptions = [
-        { shipping_rate: shippingRateIds["GB"] },
-        { shipping_rate: shippingRateIds["EU"] },
-        { shipping_rate: shippingRateIds["US"] },
-        { shipping_rate: shippingRateIds["AU"] },
-        { shipping_rate: shippingRateIds["CA"] },
-      ];
-    }
-
     const allowedCountries = ["GB", "US", "AU", "CA", ...europeanCountries];
 
     // Create Stripe checkout session
@@ -456,7 +525,7 @@ app.post("/api", async (req, res) => {
       payment_method_types: ["card", "paypal"],
       line_items: line_items,
       mode: "payment",
-      success_url: `${config.DOMAIN}/success-s.php?session_id={CHECKOUT_SESSION_ID}`, // Updated to success-s.php
+      success_url: `${config.DOMAIN}/success-s.php?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${config.DOMAIN}/cancel.php`,
       customer_email: email || null,
       phone_number_collection: {
@@ -470,18 +539,110 @@ app.post("/api", async (req, res) => {
       allow_promotion_codes: true,
       metadata: {
         priceIds: priceIds.join(","),
+        detectedCountry: detectedCountry || "unknown",
       },
     });
 
     console.log(`Stripe session created: ${session.id}`);
-    res.json({ url: session.url });
+    res.json({
+      success: true,
+      sessionId: session.id,
+      url: session.url,
+      expiresAt: session.expires_at,
+      paymentStatus: session.payment_status,
+      metadata: session.metadata
+    });
   } catch (error) {
-    console.error("POST Error:", error.message);
+    console.error("Stripe create session error:", error.message);
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
+      success: false,
       error: error.message,
-      status: "error",
       code: statusCode,
+    });
+  }
+});
+
+// Get Stripe session by ID
+app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["line_items.data.price.product", "payment_intent"],
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: session.id,
+        paymentStatus: session.payment_status,
+        status: session.status,
+        customerEmail: session.customer_email,
+        customerDetails: session.customer_details,
+        amountTotal: session.amount_total,
+        amountSubtotal: session.amount_subtotal,
+        shippingCost: session.shipping_cost,
+        currency: session.currency,
+        expiresAt: session.expires_at,
+        metadata: session.metadata,
+        lineItems: session.line_items,
+        shippingAddress: session.shipping_details?.address,
+        billingAddress: session.customer_details?.address,
+        paymentIntent: session.payment_intent
+      }
+    });
+  } catch (error) {
+    console.error("Stripe session error:", error.message);
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to fetch session",
+      details: error.message 
+    });
+  }
+});
+
+// Verify Stripe payment status
+app.post("/api/stripe/verify-payment", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: "Session ID is required"
+      });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["payment_intent"],
+    });
+
+    const isPaid = session.payment_status === "paid";
+    const isCompleted = session.status === "complete";
+
+    res.json({
+      success: true,
+      data: {
+        sessionId: session.id,
+        paymentStatus: session.payment_status,
+        status: session.status,
+        isPaid: isPaid,
+        isCompleted: isCompleted,
+        amountTotal: session.amount_total,
+        currency: session.currency,
+        customerEmail: session.customer_email,
+        paymentIntentId: session.payment_intent?.id,
+        paymentIntentStatus: session.payment_intent?.status,
+        metadata: session.metadata
+      }
+    });
+  } catch (error) {
+    console.error("Stripe verify payment error:", error.message);
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to verify payment",
+      details: error.message 
     });
   }
 });
@@ -492,44 +653,49 @@ app.post("/api", async (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     message: "Stripe & PayPal Integration API",
+    version: "2.0",
     endpoints: {
       stripe: {
-        products: "GET /api?action=get_all_products",
-        createSession: "POST /api",
-        getSession: "GET /api?action=get_session&session_id=:id"
+        products: "GET /api/stripe/products",
+        product: "GET /api/stripe/products/:priceId",
+        createSession: "POST /api/stripe/create-session",
+        getSession: "GET /api/stripe/sessions/:sessionId",
+        verifyPayment: "POST /api/stripe/verify-payment"
       },
       paypal: {
         createOrder: "POST /api/paypal/create-order",
         captureOrder: "POST /api/paypal/capture-order/:orderId"
       },
       health: "GET /api/health",
-      test: "GET /live"
     }
   });
 });
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ error: "Endpoint not found" });
+  res.status(404).json({ 
+    success: false,
+    error: "Endpoint not found" 
+  });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.stack);
   res.status(500).json({
+    success: false,
     error: "Internal server error",
-    status: "error",
     code: 500,
   });
 });
 
 // Start server
 app.listen(port, "0.0.0.0", () => {
-  console.log(`ğŸš€ Express.js API is running on port ${port}`);
-  console.log(`ğŸŒ Express.js API is at: ${config.DOMAIN}:${port}`);
-  console.log(`ğŸ¯ CORS allowed origins: ${allowedOrigins.join(", ")}`);
-  console.log(`ğŸ  Domain for PHP files: ${config.DOMAIN}`);
-  console.log(`ğŸª Store: ${config.STORE_NAME}`);
+  console.log(`í ½íº€ Express.js API is running on port ${port}`);
+  console.log(`í ¼í¼ Express.js API is at: ${config.DOMAIN}:${port}`);
+  console.log(`í ¼í¾¯ CORS allowed origins: ${allowedOrigins.join(", ")}`);
+  console.log(`í ¼í¿  Domain for PHP/HTML files: ${config.DOMAIN}`);
+  console.log(`í ¼í¿ª Store: ${config.STORE_NAME}`);
   console.log(`âœ… Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`);
 });
 
