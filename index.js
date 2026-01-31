@@ -4,6 +4,7 @@ const cors = require("cors");
 const Stripe = require("stripe");
 const axios = require("axios");
 const cookieParser = require("cookie-parser");
+const { v4: uuidv4 } = require("uuid");
 require("dotenv").config();
 
 const app = express();
@@ -17,12 +18,14 @@ const config = {
   STORE_NAME: process.env.STORE_NAME || "My Awesome Store",
   PAYPAL_ENV: process.env.PAYPAL_ENV || "sandbox",
   // Shipping rates
-  GB: process.env.SHIPPING_RATE_GB || "shr_1SL9GtD0voGcD5ZoF86nlgoA",
-  EU: process.env.SHIPPING_RATE_EU || "shr_1SL9GtD0voGcD5Zo9m5VjFIO",
-  US: process.env.SHIPPING_RATE_US || "shr_1SL9GuD0voGcD5ZoN43oVk4O",
-  AU: process.env.SHIPPING_RATE_AU || "shr_1SL9GuD0voGcD5ZoSpN7c4lH",
-  CA: process.env.SHIPPING_RATE_CA || "shr_1SL9GuD0voGcD5ZoKesfCSiB",
+  GB: process.env.SHIPPING_RATE_GB,
+  EU: process.env.SHIPPING_RATE_EU,
+  US: process.env.SHIPPING_RATE_US,
+  AU: process.env.SHIPPING_RATE_AU,
+  CA: process.env.SHIPPING_RATE_CA,
 };
+
+const cartId = uuidv4();
 
 // Validate Stripe key
 if (!config.STRIPE_KEY) {
@@ -36,8 +39,8 @@ console.log("‚úÖ Stripe initialized successfully");
 const stripe = new Stripe(config.STRIPE_KEY);
 
 // PayPal configuration
-const PAYPAL_API_BASE = config.PAYPAL_ENV === "live" 
-  ? "https://api-m.paypal.com" 
+const PAYPAL_API_BASE = config.PAYPAL_ENV === "live"
+  ? "https://api-m.paypal.com"
   : "https://api-m.sandbox.paypal.com";
 
 let paypalTokenCache = {
@@ -121,7 +124,7 @@ function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
   ];
 
   let sortedShippingOptions = [];
-  
+
   if (detectedCountry === "GB") {
     sortedShippingOptions = [
       { shipping_rate: shippingRateIds["GB"] },
@@ -171,7 +174,7 @@ function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
       { shipping_rate: shippingRateIds["CA"] },
     ];
   }
-  
+
   return sortedShippingOptions;
 }
 
@@ -211,8 +214,8 @@ app.options("*", cors(corsOptions));
 // HEALTH & INFO ENDPOINTS
 // ========================
 app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     timestamp: new Date().toISOString(),
     services: {
       stripe: "active",
@@ -288,14 +291,15 @@ app.post("/api/paypal/create-order", async (req, res) => {
 
     const totalAmount = (totalCents / 100).toFixed(2);
     const accessToken = await getPayPalAccessToken();
-    
+
     const paypalResponse = await axios.post(
       `${PAYPAL_API_BASE}/v2/checkout/orders`,
       {
         intent: "CAPTURE",
         purchase_units: [
           {
-            reference_id: "cart-" + Date.now(),
+            reference_id: cartId,
+            custom_id: cartId,
             amount: {
               currency_code: currency,
               value: totalAmount,
@@ -337,7 +341,7 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
     const accessToken = await getPayPalAccessToken();
-    
+
     const response = await axios.post(
       `${PAYPAL_API_BASE}/v2/checkout/orders/${orderId}/capture`,
       {},
@@ -356,10 +360,10 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
     });
   } catch (err) {
     console.error(`PayPal ${config.PAYPAL_ENV} capture error:`, err.response?.data || err.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: "Failed to capture PayPal order",
-      details: err.response?.data || err.message 
+      details: err.response?.data || err.message
     });
   }
 });
@@ -396,7 +400,7 @@ app.get("/api/stripe/products", async (req, res) => {
         recurring: price.recurring,
       };
     });
-    
+
     res.json({
       success: true,
       count: products.length,
@@ -404,10 +408,10 @@ app.get("/api/stripe/products", async (req, res) => {
     });
   } catch (error) {
     console.error("Stripe products error:", error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: "Failed to fetch products",
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -416,7 +420,7 @@ app.get("/api/stripe/products", async (req, res) => {
 app.get("/api/stripe/products/:priceId", async (req, res) => {
   try {
     const { priceId } = req.params;
-    
+
     const price = await stripe.prices.retrieve(priceId, {
       expand: ["product"],
     });
@@ -442,17 +446,17 @@ app.get("/api/stripe/products/:priceId", async (req, res) => {
       type: price.type,
       recurring: price.recurring,
     };
-    
+
     res.json({
       success: true,
       data: product
     });
   } catch (error) {
     console.error("Stripe product error:", error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: "Failed to fetch product",
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -463,9 +467,9 @@ app.post("/api/stripe/create-session", async (req, res) => {
     const { items, email } = req.body;
 
     if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: "Invalid or missing items data" 
+        error: "Invalid or missing items data"
       });
     }
 
@@ -525,21 +529,37 @@ app.post("/api/stripe/create-session", async (req, res) => {
       payment_method_types: ["card", "paypal"],
       line_items: line_items,
       mode: "payment",
+
       success_url: `${config.DOMAIN}/success-s.php?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${config.DOMAIN}/cancel.php`,
+
       customer_email: email || null,
+
       phone_number_collection: {
         enabled: true,
       },
+
       shipping_address_collection: {
         allowed_countries: allowedCountries,
       },
+
       shipping_options: sortedShippingOptions,
+
       billing_address_collection: "required",
       allow_promotion_codes: true,
+
+      // ‚úÖ THIS IS FOR checkout.session.completed
       metadata: {
+        cartId,
         priceIds: priceIds.join(","),
         detectedCountry: detectedCountry || "unknown",
+      },
+
+      // ‚úÖ THIS IS FOR payment_intent.* webhooks (IMPORTANT)
+      payment_intent_data: {
+        metadata: {
+          cartId,
+        },
       },
     });
 
@@ -567,7 +587,7 @@ app.post("/api/stripe/create-session", async (req, res) => {
 app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
+
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["line_items.data.price.product", "payment_intent"],
     });
@@ -594,10 +614,10 @@ app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
     });
   } catch (error) {
     console.error("Stripe session error:", error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: "Failed to fetch session",
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -606,7 +626,7 @@ app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
 app.post("/api/stripe/verify-payment", async (req, res) => {
   try {
     const { sessionId } = req.body;
-    
+
     if (!sessionId) {
       return res.status(400).json({
         success: false,
@@ -639,10 +659,10 @@ app.post("/api/stripe/verify-payment", async (req, res) => {
     });
   } catch (error) {
     console.error("Stripe verify payment error:", error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: "Failed to verify payment",
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -673,9 +693,9 @@ app.get("/", (req, res) => {
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     success: false,
-    error: "Endpoint not found" 
+    error: "Endpoint not found"
   });
 });
 
@@ -691,11 +711,11 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(port, "0.0.0.0", () => {
-  console.log(`Ì†ΩÌ∫Ä Express.js API is running on port ${port}`);
-  console.log(`Ì†ºÌºê Express.js API is at: ${config.DOMAIN}:${port}`);
-  console.log(`Ì†ºÌæØ CORS allowed origins: ${allowedOrigins.join(", ")}`);
-  console.log(`Ì†ºÌø† Domain for PHP/HTML files: ${config.DOMAIN}`);
-  console.log(`Ì†ºÌø™ Store: ${config.STORE_NAME}`);
+  console.log(`Express.js API is running on port ${port}`);
+  console.log(`Express.js API is at: ${config.DOMAIN}:${port}`);
+  console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
+  console.log(`Domain for PHP/HTML files: ${config.DOMAIN}`);
+  console.log(`Store: ${config.STORE_NAME}`);
   console.log(`‚úÖ Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`);
 });
 
