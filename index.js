@@ -222,7 +222,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
           },
         ],
         application_context: {
-          return_url: `${config.FRONT_END_HOST}/success.php`,
+          return_url: `${config.FRONT_END_HOST}/success-pp.php`, // Updated to success-pp.php
           cancel_url: `${config.FRONT_END_HOST}/cancel.php`,
           brand_name: config.STORE_NAME,
           user_action: "PAY_NOW",
@@ -456,7 +456,7 @@ app.post("/api", async (req, res) => {
       payment_method_types: ["card", "paypal"],
       line_items: line_items,
       mode: "payment",
-      success_url: `${config.DOMAIN}/success.php?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${config.DOMAIN}/success-s.php?session_id={CHECKOUT_SESSION_ID}`, // Updated to success-s.php
       cancel_url: `${config.DOMAIN}/cancel.php`,
       customer_email: email || null,
       phone_number_collection: {
@@ -530,6 +530,7 @@ app.listen(port, "0.0.0.0", () => {
   console.log(`🎯 CORS allowed origins: ${allowedOrigins.join(", ")}`);
   console.log(`🏠 Domain for PHP files: ${config.DOMAIN}`);
   console.log(`🏪 Store: ${config.STORE_NAME}`);
+  console.log(`✅ Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`);
 });
 
 module.exports = app;

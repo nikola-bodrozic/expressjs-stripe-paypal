@@ -4,18 +4,15 @@ require_once 'vendor/autoload.php';
 use Dotenv\Dotenv;
 
 // Load .env file
-$dotenv = Dotenv::createImmutable(__DIR__); // Adjust path as needed
+$dotenv = Dotenv::createImmutable(__DIR__);
 $dotenv->load();
-
-// Now getenv() will work with values from .env
-
 
 header('Content-Type: text/html; charset=UTF-8');
 
-// Get payment parameters
+// Get PayPal parameters
 $paypalToken = $_GET['token'] ?? null;
 $payerId = $_GET['PayerID'] ?? null;
-$stripeSessionId = $_GET['session_id'] ?? null;
+$paymentId = $_GET['paymentId'] ?? null;
 
 // Store configuration
 $storeName = "My Awesome Store";
@@ -23,7 +20,7 @@ $storeEmail = "support@example.com";
 $storePhone = "+1 (555) 123-4567";
 
 // Default values
-$paymentMethod = 'unknown';
+$paymentMethod = 'paypal';
 $paymentStatus = 'processing';
 $orderId = 'N/A';
 $orderAmount = null;
@@ -31,90 +28,104 @@ $currency = 'GBP';
 $customerEmail = null;
 $customerName = null;
 $transactionId = null;
+$captureData = null;
 
 // ========================
 // HANDLE PAYPAL PAYMENTS
 // ========================
 if ($paypalToken) {
-    $paymentMethod = 'paypal';
     $orderId = $paypalToken;
-    $transactionId = $paypalToken;
     
-    // In production, you would capture the PayPal order here
-    // For now, assume success for display purposes
-    $paymentStatus = 'completed';
-    $orderAmount = null; // Would be from PayPal response
-    $currency = 'GBP';
-    
-    // Note: In production, implement PayPal capture logic
-    // $captureUrl = '/paypal/capture-order/' . $paypalToken;
-    // ... make API call to capture PayPal payment
-    
-} 
-// ========================
-// HANDLE STRIPE PAYMENTS
-// ========================
-elseif ($stripeSessionId) {
-    $paymentMethod = 'stripe';
-    $orderId = $stripeSessionId;
-    $transactionId = $stripeSessionId;
-    
-    // Get session details from Express API
-    $apiBaseUrl = getenv('API_BASE_URL');
-    error_log("API Base URL: " . $apiBaseUrl);
-    $apiBaseUrl = $_ENV['API_BASE_URL'];
-    $apiUrl = $apiBaseUrl . '/api?action=get_session&session_id=' . urlencode($stripeSessionId);
-    
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $apiUrl,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 5,
-        CURLOPT_HTTPHEADER => ['Accept: application/json'],
-    ]);
-    
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    if ($response && $httpCode === 200) {
-        $data = json_decode($response, true);
+    try {
+        // Get API base URL from environment
+        $apiBaseUrl = $_ENV['API_BASE_URL'] ?? getenv('API_BASE_URL') ?? 'http://localhost:3000';
         
-        $paymentStatus = $data['payment_status'] ?? ($data['status'] ?? 'processing');
-        $orderAmount = isset($data['amount_total']) ? $data['amount_total'] / 100 : null;
-        $currency = strtoupper($data['currency'] ?? 'GBP');
-        $customerEmail = $data['customer_details']['email'] ?? null;
-        $customerName = $data['customer_details']['name'] ?? null;
+        // Capture the PayPal order
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $apiBaseUrl . '/api/paypal/capture-order/' . urlencode($paypalToken),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($response && $httpCode === 200) {
+            $captureData = json_decode($response, true);
+            
+            if ($captureData['success'] && $captureData['data']) {
+                $paypalData = $captureData['data'];
+                $paymentStatus = strtolower($paypalData['status']);
+                
+                // Get real amount from PayPal response
+                if (isset($paypalData['purchase_units'][0]['payments']['captures'][0])) {
+                    $capture = $paypalData['purchase_units'][0]['payments']['captures'][0];
+                    $orderAmount = $capture['amount']['value'];
+                    $currency = $capture['amount']['currency_code'];
+                    $transactionId = $capture['id'];
+                }
+                
+                // Get customer info
+                if (isset($paypalData['payer'])) {
+                    $customerEmail = $paypalData['payer']['email_address'] ?? null;
+                    $customerName = $paypalData['payer']['name']['given_name'] . ' ' . 
+                                  $paypalData['payer']['name']['surname'] ?? null;
+                }
+            } else {
+                $paymentStatus = 'failed';
+                error_log("PayPal capture failed: " . print_r($captureData, true));
+            }
+        } else {
+            $paymentStatus = 'failed';
+            error_log("PayPal API call failed. HTTP Code: $httpCode, Response: $response");
+        }
+    } catch (Exception $e) {
+        $paymentStatus = 'error';
+        error_log("PayPal capture exception: " . $e->getMessage());
     }
+} else {
+    $paymentStatus = 'missing';
 }
 
 // ========================
 // DETERMINE DISPLAY
 // ========================
-$isSuccess = in_array(strtolower($paymentStatus), ['paid', 'complete', 'completed', 'succeeded']);
-$isProcessing = in_array(strtolower($paymentStatus), ['processing', 'pending', 'unpaid']);
-$isFailed = in_array(strtolower($paymentStatus), ['failed', 'canceled', 'expired']);
+$isSuccess = in_array(strtolower($paymentStatus), ['completed', 'approved', 'succeeded']);
+$isProcessing = in_array(strtolower($paymentStatus), ['processing', 'pending', 'created']);
+$isFailed = in_array(strtolower($paymentStatus), ['failed', 'canceled', 'expired', 'error']);
+$isMissing = strtolower($paymentStatus) === 'missing';
+
+// ... rest of your success-pp.php file remains the same ...
 
 if ($isSuccess) {
     $icon = '✓';
     $color = '#4CAF50';
     $title = 'Payment Successful!';
-    $message = 'Thank you for your purchase! Your order has been confirmed and is being processed.';
+    $message = 'Thank you for your PayPal purchase! Your order has been confirmed and is being processed.';
 } elseif ($isProcessing) {
     $icon = '⏳';
     $color = '#FFC107';
     $title = 'Payment Processing';
-    $message = 'Your payment is being processed. This may take a few moments.';
+    $message = 'Your PayPal payment is being processed. This may take a few moments.';
 } elseif ($isFailed) {
     $icon = '⚠️';
     $color = '#F44336';
     $title = 'Payment Issue';
-    $message = 'There was an issue with your payment. Please try again or contact support.';
+    $message = 'There was an issue with your PayPal payment. Please try again or contact support.';
+} elseif ($isMissing) {
+    $icon = '❓';
+    $color = '#9E9E9E';
+    $title = 'Token Missing';
+    $message = 'No PayPal token provided. Please return to checkout and try again.';
 } else {
     $icon = '❓';
     $color = '#9E9E9E';
     $title = 'Payment Status';
-    $message = 'We\'re checking your payment status.';
+    $message = 'We\'re checking your PayPal payment status.';
 }
 
 // Format currency
@@ -137,8 +148,7 @@ function formatCurrency($amount, $currency) {
 function getPaymentMethodDisplay($method) {
     $methods = [
         'paypal' => ['name' => 'PayPal', 'icon' => '🏦', 'color' => '#0070BA'],
-        'stripe' => ['name' => 'Stripe', 'icon' => '💳', 'color' => '#635BFF'],
-        'default' => ['name' => 'Payment', 'icon' => '💰', 'color' => '#666']
+        'default' => ['name' => 'PayPal', 'icon' => '🏦', 'color' => '#0070BA']
     ];
     
     return $methods[$method] ?? $methods['default'];
@@ -394,6 +404,7 @@ $paymentInfo = getPaymentMethodDisplay($paymentMethod);
             <div class="payment-method">
                 <span><?php echo $paymentInfo['icon']; ?></span>
                 <span><?php echo htmlspecialchars($paymentInfo['name']); ?></span>
+                <span class="paypal-badge">PAYPAL</span>
             </div>
             
             <div class="status-icon"><?php echo $icon; ?></div>
@@ -408,11 +419,20 @@ $paymentInfo = getPaymentMethodDisplay($paymentMethod);
             
             <div class="details-card">
                 <div class="detail-item">
-                    <div class="detail-label">Order Reference</div>
+                    <div class="detail-label">PayPal Order ID</div>
                     <div class="detail-value">
                         <span class="order-id"><?php echo htmlspecialchars($orderId); ?></span>
                     </div>
                 </div>
+                
+                <?php if ($payerId): ?>
+                <div class="detail-item">
+                    <div class="detail-label">Payer ID</div>
+                    <div class="detail-value">
+                        <span class="order-id"><?php echo htmlspecialchars($payerId); ?></span>
+                    </div>
+                </div>
+                <?php endif; ?>
                 
                 <?php if ($orderAmount): ?>
                 <div class="detail-item">
@@ -439,7 +459,9 @@ $paymentInfo = getPaymentMethodDisplay($paymentMethod);
                 
                 <div class="detail-item">
                     <div class="detail-label">Payment Method</div>
-                    <div class="detail-value"><?php echo strtoupper($paymentMethod); ?></div>
+                    <div class="detail-value">
+                        <strong class="paypal-blue">PayPal</strong>
+                    </div>
                 </div>
                 
                 <div class="detail-item">
@@ -459,15 +481,17 @@ $paymentInfo = getPaymentMethodDisplay($paymentMethod);
                     View Orders
                 </a>
                 
-                <a href="/contact" class="btn btn-secondary">
-                    <i class="fas fa-headset"></i>
-                    Contact Support
+                <?php if ($isFailed || $isMissing): ?>
+                <a href="/checkout?paypal_token=<?php echo urlencode($paypalToken); ?>" class="btn btn-secondary" style="background: #003087; color: white; border-color: #003087;">
+                    <i class="fab fa-paypal"></i>
+                    Retry with PayPal
                 </a>
+                <?php endif; ?>
             </div>
             
             <div class="footer">
                 <p>Thank you for choosing <strong><?php echo htmlspecialchars($storeName); ?></strong></p>
-                <p>Your order reference: <strong><?php echo htmlspecialchars($orderId); ?></strong></p>
+                <p>Your PayPal order ID: <strong><?php echo htmlspecialchars($orderId); ?></strong></p>
                 
                 <div class="contact-info">
                     <div class="contact-item">

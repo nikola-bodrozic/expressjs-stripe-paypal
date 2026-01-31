@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Store Backend Tester</title>
+</head>
+<body>
+    <h1>Store Backend Tester</h1>
+    <p>Test your Stripe and PayPal integration</p>
+    
+    <h2>Test Stripe Checkout</h2>
+    <form id="stripeForm">
+        <div>
+            <label for="stripeItems">Items (JSON):</label><br>
+            <textarea id="stripeItems" rows="4" cols="60">[{"id":"price_1StHDdD0voGcD5ZoTRCW3RrO","quantity":1}]</textarea>
+        </div>
+        <div>
+            <label for="stripeEmail">Email:</label><br>
+            <input type="email" id="stripeEmail" value="test@example.com" size="40">
+        </div>
+        <br>
+        <button type="button" onclick="testStripe()">Test Stripe Checkout (£1.50)</button>
+    </form>
+    
+    <hr>
+    
+    <h2>Test PayPal Order</h2>
+    <form id="paypalForm">
+        <div>
+            <label for="paypalItems">Items (JSON):</label><br>
+            <textarea id="paypalItems" rows="4" cols="60">[{"priceId":"price_1StHDdD0voGcD5ZoTRCW3RrO","quantity":1}]</textarea>
+        </div>
+        <br>
+        <button type="button" onclick="testPayPal()">Test PayPal Order (£1.50)</button>
+    </form>
+    
+    <script>
+        function testStripe() {
+            const items = JSON.parse(document.getElementById('stripeItems').value);
+            const email = document.getElementById('stripeEmail').value;
+            
+            const data = { items: items, email: email };
+            
+            fetch('http://localhost:3000/api', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.url) {
+                    window.location.href = data.url;
+                } else {
+                    alert('Stripe Error: ' + JSON.stringify(data));
+                }
+            })
+            .catch(error => {
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function testPayPal() {
+            const items = JSON.parse(document.getElementById('paypalItems').value);
+            
+            fetch('http://localhost:3000/api/paypal/create-order', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({items: items})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.id && data.links) {
+                    const approveLink = data.links.find(link => link.rel === 'approve');
+                    if (approveLink) {
+                        window.location.href = approveLink.href;
+                    } else {
+                        alert('No PayPal approval link found');
+                    }
+                } else {
+                    alert('PayPal Error: ' + JSON.stringify(data));
+                }
+            })
+            .catch(error => {
+                alert('Error: ' + error.message);
+            });
+        }
+    </script>
+</body>
+</html>
