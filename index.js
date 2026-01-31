@@ -1,34 +1,44 @@
-// paypal.js
+// stripe.js - Combined Stripe + PayPal
 const express = require("express");
-const axios = require("axios");
-const app = express();
-const cookieParser = require("cookie-parser");
 const cors = require("cors");
-
-app.use(cors({ origin: ["http://localhost:5173","http://localhost"] }));
-app.use(express.json()); // Middleware to parse JSON data
-app.use(express.urlencoded({ extended: true })); // Middleware to parse URL-encoded data
-app.use(cookieParser()); // Middleware to parse cookies
+const Stripe = require("stripe");
+const axios = require("axios");
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 
-const PORT = process.env.PORT;
-const STRIPE_SRV_KEY = process.env.STRIPE_SRV_KEY;
-const PAYPAL_ENV = process.env.PAYPAL_ENV || "sandbox"; // sandbox or live
-const STORE_NAME = process.env.STORE_NAME || "Test Store";
-const FRONT_END_HOST = process.env.FRONT_END_HOST;
-// Validate required environment variables
-if (!STRIPE_SRV_KEY) {
-  console.error("STRIPE_SRV_KEY is not set in environment variables");
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Load configuration from environment variables
+const config = {
+  STRIPE_KEY: process.env.STRIPE_KEY || process.env.STRIPE_SRV_KEY,
+  DOMAIN: process.env.DOMAIN || "http://localhost",
+  FRONT_END_HOST: process.env.FRONT_END_HOST || "http://localhost",
+  STORE_NAME: process.env.STORE_NAME || "My Awesome Store",
+  PAYPAL_ENV: process.env.PAYPAL_ENV || "sandbox",
+  // Shipping rates
+  GB: process.env.SHIPPING_RATE_GB || "shr_1SL9GtD0voGcD5ZoF86nlgoA",
+  EU: process.env.SHIPPING_RATE_EU || "shr_1SL9GtD0voGcD5Zo9m5VjFIO",
+  US: process.env.SHIPPING_RATE_US || "shr_1SL9GuD0voGcD5ZoN43oVk4O",
+  AU: process.env.SHIPPING_RATE_AU || "shr_1SL9GuD0voGcD5ZoSpN7c4lH",
+  CA: process.env.SHIPPING_RATE_CA || "shr_1SL9GuD0voGcD5ZoKesfCSiB",
+};
+
+// Validate Stripe key
+if (!config.STRIPE_KEY) {
+  console.error("❌ ERROR: STRIPE_KEY is not set in environment variables");
   process.exit(1);
 }
 
-// Set PayPal API URL based on environment
-const PAYPAL_API_BASE = PAYPAL_ENV === "live" 
+console.log("✅ Stripe initialized successfully");
+
+// Initialize Stripe
+const stripe = new Stripe(config.STRIPE_KEY);
+
+// PayPal configuration
+const PAYPAL_API_BASE = config.PAYPAL_ENV === "live" 
   ? "https://api-m.paypal.com" 
   : "https://api-m.sandbox.paypal.com";
-
-console.log(`PayPal environment: ${PAYPAL_ENV.toUpperCase()}`);
-console.log(`PayPal API URL: ${PAYPAL_API_BASE}`);
 
 let paypalTokenCache = {
   token: null,
@@ -67,28 +77,69 @@ async function getPayPalAccessToken() {
       expiresAt: Date.now() + response.data.expires_in * 1000,
     };
 
-    console.log(`PayPal ${PAYPAL_ENV.toUpperCase()} token obtained and cached`);
+    console.log(`PayPal ${config.PAYPAL_ENV.toUpperCase()} token obtained and cached`);
     return response.data.access_token;
   } catch (error) {
     console.error(
-      `PayPal ${PAYPAL_ENV.toUpperCase()} Access Token Error:`,
+      `PayPal ${config.PAYPAL_ENV.toUpperCase()} Access Token Error:`,
       error.response?.data || error.message,
     );
     throw new Error(
-      `Failed to get PayPal ${PAYPAL_ENV} access token: ${error.response?.data?.error_description || error.message}`,
+      `Failed to get PayPal ${config.PAYPAL_ENV} access token: ${error.response?.data?.error_description || error.message}`,
     );
   }
 }
 
+// CORS configuration
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost",
+  "http://127.0.0.1",
+  "http://localhost:80",
+  "http://127.0.0.1:80",
+  config.FRONT_END_HOST,
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log("⚠️ CORS blocked origin:", origin);
+      callback(null, true); // Allow for development
+    }
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+  maxAge: 3600,
+};
+
+app.use(cors(corsOptions));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// Handle preflight requests
+app.options("*", cors(corsOptions));
+
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    services: {
+      stripe: "active",
+      paypal: config.PAYPAL_ENV,
+      environment: process.env.NODE_ENV || "development"
+    }
+  });
+});
+
+// ========================
+// PAYPAL ENDPOINTS
+// ========================
 // Create PayPal order using Stripe prices
 app.post("/api/paypal/create-order", async (req, res) => {
   try {
-    // {
-    //   "items": [
-    //     {"priceId": "price_1QsBjhD0voGcD5Zof94i6IkP","quantity": 2},
-    //     {"priceId": "price_1RJRLDD0voGcD5ZoTFQdTZUQ", "quantity": 1}
-    //   ]
-    // }
     const { items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -99,12 +150,12 @@ app.post("/api/paypal/create-order", async (req, res) => {
     let totalCents = 0;
     let currency = null;
 
-    // Loop through Stripe prices (axios, sequential)
+    // Loop through Stripe prices
     for (const item of items) {
       // Get price data
       const { data: price } = await axios.get(
         `https://api.stripe.com/v1/prices/${item.priceId}`,
-        { auth: { username: process.env.STRIPE_SRV_KEY, password: "" } },
+        { auth: { username: config.STRIPE_KEY, password: "" } },
       );
 
       // Validate
@@ -118,7 +169,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
         try {
           const { data: product } = await axios.get(
             `https://api.stripe.com/v1/products/${price.product}`,
-            { auth: { username: process.env.STRIPE_SRV_KEY, password: "" } },
+            { auth: { username: config.STRIPE_KEY, password: "" } },
           );
           title = product.name || "Product";
         } catch (e) {
@@ -130,9 +181,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
       const itemCurrency = price.currency.toUpperCase();
       if (!currency) currency = itemCurrency;
       else if (currency !== itemCurrency) {
-        return res
-          .status(400)
-          .json({ error: "Mixed currencies are not allowed" });
+        return res.status(400).json({ error: "Mixed currencies are not allowed" });
       }
 
       // Add to totals and items
@@ -140,19 +189,17 @@ app.post("/api/paypal/create-order", async (req, res) => {
       totalCents += price.unit_amount * qty;
 
       paypalItems.push({
-        name: title, // Title
+        name: title,
         unit_amount: {
-          currency_code: currency, // Currency (GBP, EUR, USD)
-          value: (price.unit_amount / 100).toFixed(2), // Price in decimal
+          currency_code: currency,
+          value: (price.unit_amount / 100).toFixed(2),
         },
         quantity: qty.toString(),
       });
     }
 
     const totalAmount = (totalCents / 100).toFixed(2);
-
     const accessToken = await getPayPalAccessToken();
-    console.log("PayPal items:", paypalItems);
     
     const paypalResponse = await axios.post(
       `${PAYPAL_API_BASE}/v2/checkout/orders`,
@@ -160,7 +207,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
         intent: "CAPTURE",
         purchase_units: [
           {
-            reference_id: "cart-001",
+            reference_id: "cart-" + Date.now(),
             amount: {
               currency_code: currency,
               value: totalAmount,
@@ -175,9 +222,9 @@ app.post("/api/paypal/create-order", async (req, res) => {
           },
         ],
         application_context: {
-          return_url: `${FRONT_END_HOST}/success.php`,
-          cancel_url: `${FRONT_END_HOST}/cancel.php`,
-          brand_name: STORE_NAME,
+          return_url: `${config.FRONT_END_HOST}/success.php`,
+          cancel_url: `${config.FRONT_END_HOST}/cancel.php`,
+          brand_name: config.STORE_NAME,
           user_action: "PAY_NOW",
         },
       },
@@ -189,11 +236,11 @@ app.post("/api/paypal/create-order", async (req, res) => {
       },
     );
 
-    console.log(`PayPal ${PAYPAL_ENV} order created: ${paypalResponse.data.id}`);
+    console.log(`PayPal ${config.PAYPAL_ENV} order created: ${paypalResponse.data.id}`);
     res.json(paypalResponse.data);
   } catch (err) {
-    console.error(`PayPal ${PAYPAL_ENV} create order error:`, err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to create PayPal order" });
+    console.error(`PayPal ${config.PAYPAL_ENV} create order error:`, err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to create PayPal order", details: err.message });
   }
 });
 
@@ -214,13 +261,13 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
       }
     );
 
-    console.log(`PayPal ${PAYPAL_ENV} order captured: ${orderId}`);
+    console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
     res.json({
       success: true,
       data: response.data
     });
   } catch (err) {
-    console.error(`PayPal ${PAYPAL_ENV} capture error:`, err.response?.data || err.message);
+    console.error(`PayPal ${config.PAYPAL_ENV} capture error:`, err.response?.data || err.message);
     res.status(500).json({ 
       success: false,
       error: "Failed to capture PayPal order",
@@ -229,139 +276,17 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get("/api/health", (req, res) => {
-    res.json({ 
-        status: "ok", 
-        timestamp: new Date().toISOString(),
-        service: "PayPal-Stripe Integration API",
-        environment: {
-          paypal: PAYPAL_ENV,
-          node: process.env.NODE_ENV || "development"
-        }
-    });
-});
-
-// Root endpoint
-app.get("/", (req, res) => {
-  res.json({
-    message: "PayPal-Stripe Integration API",
-    environment: PAYPAL_ENV.toUpperCase(),
-    store: STORE_NAME,
-    endpoints: {
-      createOrder: "POST /api/paypal/create-order",
-      captureOrder: "POST /api/paypal/capture-order/:orderId",
-      health: "GET /api/health"
-    }
-  });
-});
-
-// Start the server
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server Started on port ${PORT}`);
-  });
-}
-
-// stripe.js
-module.exports = app;const express = require("express");
-const cors = require("cors");
-const Stripe = require("stripe");
-const axios = require("axios");
-require("dotenv").config();
-
-const app = express();
-const port = process.env.PORT || 3000; // PORT 3000
-
-// Load configuration from environment variables
-const config = {
-  STRIPE_KEY: process.env.STRIPE_KEY, // CORRECT: STRIPE_KEY not STRIPE_SEC_KEY
-  DOMAIN: process.env.DOMAIN || "http://localhost",
-  GB: process.env.SHIPPING_RATE_GB || "shr_1SL9GtD0voGcD5ZoF86nlgoA",
-  EU: process.env.SHIPPING_RATE_EU || "shr_1SL9GtD0voGcD5Zo9m5VjFIO",
-  US: process.env.SHIPPING_RATE_US || "shr_1SL9GuD0voGcD5ZoN43oVk4O",
-  AU: process.env.SHIPPING_RATE_AU || "shr_1SL9GuD0voGcD5ZoSpN7c4lH",
-  CA: process.env.SHIPPING_RATE_CA || "shr_1SL9GuD0voGcD5ZoKesfCSiB",
-};
-
-// Validate Stripe key
-if (!config.STRIPE_KEY) {
-  console.error("❌ ERROR: STRIPE_KEY is not set in environment variables");
-  console.error(
-    "Make sure your .env file has: STRIPE_KEY=sk_test_your_key_here",
-  );
-  process.exit(1);
-}
-
-console.log("✅ Stripe initialized successfully");
-console.log(`✅ Domain: ${config.DOMAIN}`);
-console.log(`✅ Port: ${port}`);
-
-// Initialize Stripe
-const stripe = new Stripe(config.STRIPE_KEY);
-
-// CORS configuration - UPDATED to allow all localhost variants
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost",
-  "http://127.0.0.1",
-  "http://localhost:80",
-  "http://127.0.0.1:80",
-  "http://0.0.0.0:3000",
-];
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like from PHP curl)
-    if (!origin) {
-      return callback(null, true);
-    }
-
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log("⚠️ CORS blocked origin:", origin);
-      // For development, allow all
-      callback(null, true);
-    }
-  },
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"],
-  maxAge: 3600,
-};
-
-app.use(cors(corsOptions));
-app.use(express.json());
-
-// Handle preflight requests
-app.options("*", cors(corsOptions));
-
-// Helper function to detect country from IP
-async function detectCountryFromIP(ip) {
-  try {
-    const response = await axios.get(`https://ipapi.co/${ip}/country_code/`, {
-      timeout: 5000,
-    });
-    return response.data.trim();
-  } catch (error) {
-    console.error("Error detecting country:", error.message);
-    return "";
-  }
-}
-
+// ========================
+// STRIPE ENDPOINTS
+// ========================
 // GET endpoint: Get all products
 app.get("/api", async (req, res) => {
   try {
-    console.log(
-      `GET /api - Action: ${req.query.action}, Session ID: ${req.query.session_id || "none"}`,
-    );
-
     if (req.query.action === "get_all_products") {
       const prices = await stripe.prices.list({
         expand: ["data.product"],
       });
 
-      // Filter only active prices and active products
       const activePrices = prices.data.filter(
         (price) => price.active && price.product.active,
       );
@@ -379,19 +304,12 @@ app.get("/api", async (req, res) => {
       });
       res.json(products);
     } else if (req.query.action === "get_session" && req.query.session_id) {
-      console.log(`Fetching Stripe session: ${req.query.session_id}`);
-
       const session = await stripe.checkout.sessions.retrieve(
         req.query.session_id,
         {
           expand: ["line_items.data.price.product", "payment_intent"],
         },
       );
-
-      console.log(`Session payment_status: ${session.payment_status}`);
-      console.log(`Session status: ${session.status}`);
-
-      // Return the full session object
       res.json(session);
     } else {
       res.status(400).json({ error: "Invalid action" });
@@ -402,11 +320,22 @@ app.get("/api", async (req, res) => {
   }
 });
 
-// POST endpoint: Create checkout session
+// Helper function to detect country from IP
+async function detectCountryFromIP(ip) {
+  try {
+    const response = await axios.get(`https://ipapi.co/${ip}/country_code/`, {
+      timeout: 5000,
+    });
+    return response.data.trim();
+  } catch (error) {
+    console.error("Error detecting country:", error.message);
+    return "";
+  }
+}
+
+// POST endpoint: Create Stripe checkout session
 app.post("/api", async (req, res) => {
   try {
-    console.log("POST /api - Creating checkout session");
-
     const { items, email } = req.body;
 
     if (!items || !Array.isArray(items)) {
@@ -436,7 +365,7 @@ app.post("/api", async (req, res) => {
       };
     });
 
-    // Shipping rate IDs (using your provided IDs)
+    // Shipping rate IDs
     const shippingRateIds = {
       GB: config.GB,
       EU: config.EU,
@@ -445,7 +374,7 @@ app.post("/api", async (req, res) => {
       CA: config.CA,
     };
 
-    // Get client IP (handle various proxy scenarios)
+    // Get client IP
     const getClientIp = (req) => {
       const xForwardedFor = req.headers["x-forwarded-for"];
       if (xForwardedFor) {
@@ -455,51 +384,21 @@ app.post("/api", async (req, res) => {
     };
 
     const ip = getClientIp(req);
-    console.log("Client IP:", ip);
-
-    // Detect country
     let detectedCountry = "";
     try {
       detectedCountry = await detectCountryFromIP(ip);
-      console.log("Detected country:", detectedCountry);
     } catch (error) {
       console.warn("Could not detect country:", error.message);
     }
 
     // European countries
     const europeanCountries = [
-      "AT",
-      "BE",
-      "BG",
-      "HR",
-      "CY",
-      "CZ",
-      "DK",
-      "EE",
-      "FI",
-      "FR",
-      "DE",
-      "GR",
-      "HU",
-      "IE",
-      "IT",
-      "LV",
-      "LT",
-      "LU",
-      "MT",
-      "NL",
-      "PL",
-      "PT",
-      "RO",
-      "SK",
-      "SI",
-      "ES",
-      "SE",
+      "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
+      "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
     ];
 
-    // sort shipping options according to country
+    // Sort shipping options according to country
     let sortedShippingOptions = [];
-
     if (detectedCountry === "GB") {
       sortedShippingOptions = [
         { shipping_rate: shippingRateIds["GB"] },
@@ -550,15 +449,9 @@ app.post("/api", async (req, res) => {
       ];
     }
 
-    // Update allowed countries to include all supported countries
     const allowedCountries = ["GB", "US", "AU", "CA", ...europeanCountries];
 
-    console.log(`Creating checkout session for ${email || "no email"}`);
-    console.log(
-      `Success URL: ${config.DOMAIN}/success.php?session_id={CHECKOUT_SESSION_ID}`,
-    );
-
-    // Create checkout session
+    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card", "paypal"],
       line_items: line_items,
@@ -580,9 +473,7 @@ app.post("/api", async (req, res) => {
       },
     });
 
-    console.log(`Session created: ${session.id}`);
-    console.log(`Session URL: ${session.url.substring(0, 50)}...`);
-
+    console.log(`Stripe session created: ${session.id}`);
     res.json({ url: session.url });
   } catch (error) {
     console.error("POST Error:", error.message);
@@ -595,11 +486,29 @@ app.post("/api", async (req, res) => {
   }
 });
 
-app.get("/live", async (req, res) => {
-  res.json({ msg: "test" });
+// ========================
+// ROOT & ERROR HANDLING
+// ========================
+app.get("/", (req, res) => {
+  res.json({
+    message: "Stripe & PayPal Integration API",
+    endpoints: {
+      stripe: {
+        products: "GET /api?action=get_all_products",
+        createSession: "POST /api",
+        getSession: "GET /api?action=get_session&session_id=:id"
+      },
+      paypal: {
+        createOrder: "POST /api/paypal/create-order",
+        captureOrder: "POST /api/paypal/capture-order/:orderId"
+      },
+      health: "GET /api/health",
+      test: "GET /live"
+    }
+  });
 });
 
-// 404 handler for undefined routes
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: "Endpoint not found" });
 });
@@ -607,16 +516,6 @@ app.use((req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.stack);
-
-  // Handle CORS errors
-  if (err.message.includes("CORS")) {
-    return res.status(403).json({
-      error: "CORS policy: Not allowed",
-      status: "error",
-      code: 403,
-    });
-  }
-
   res.status(500).json({
     error: "Internal server error",
     status: "error",
@@ -624,14 +523,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server - listen on all interfaces
+// Start server
 app.listen(port, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`🌐 Accessible at: http://localhost:${port}`);
-  console.log(`🌐 Accessible at: http://127.0.0.1:${port}`);
-  console.log(`🌐 Accessible at: http://0.0.0.0:${port}`);
+  console.log(`🚀 Express.js API is running on port ${port}`);
+  console.log(`🌐 Express.js API is at: ${config.DOMAIN}:${port}`);
   console.log(`🎯 CORS allowed origins: ${allowedOrigins.join(", ")}`);
-  console.log(`🏠 Domain configured: ${config.DOMAIN}`);
+  console.log(`🏠 Domain for PHP files: ${config.DOMAIN}`);
+  console.log(`🏪 Store: ${config.STORE_NAME}`);
 });
 
 module.exports = app;
