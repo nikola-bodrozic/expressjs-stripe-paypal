@@ -15,11 +15,19 @@ textarea { width:100%; font-family:monospace; font-size:14px; padding:8px; borde
 button { background:#007bff; color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer; font-size:16px; margin-top:10px; }
 button:hover { background:#0056b3; }
 #status { margin-top:20px; padding:15px; background:#f8f9fa; border:1px solid #ddd; border-radius:4px; font-family:monospace; white-space:pre-wrap; max-height:300px; overflow-y:auto; }
+.status-up { color:green; font-weight:bold; }
+.status-down { color:red; font-weight:bold; }
+.loader { display:inline-block; width:16px; height:16px; border:3px solid #ccc; border-top-color:#007bff; border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-right:5px; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 
 <h1>Store Backend Tester</h1>
+<hr>
+<h2>API Status</h2>
+<div id="status"><span class="loader"></span>Checking API health...</div>
+<hr>
 <p>Test Stripe and PayPal integration</p>
 
 <div class="forms-container">
@@ -44,70 +52,62 @@ button:hover { background:#0056b3; }
 <h2>Test PayPal Order</h2>
 <form id="paypalForm">
 <label>PayPal Items (JSON):</label>
-<textarea id="paypalItems" rows="6">[
-  {
-    "priceId": "price_1StHDdD0voGcD5ZoTRCW3RrO",
-    "quantity": 1
-  }
-]</textarea>
+<textarea id="paypalItems" rows="6">[{"priceId":"price_1StHDdD0voGcD5ZoTRCW3RrO","quantity":1}]</textarea>
 <button type="button" onclick="testPayPal()">Test PayPal Order</button>
 </form>
 </div>
 </div>
 
-<hr>
-<h2>API Status</h2>
-<button onclick="checkHealth()">Check API Health</button>
-<div id="status"></div>
 
+
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 <script>
-const BASE_URL = 'https://expressjs-stripe-paypal.onrender.com'; // <- update if needed
+const BASE_URL = 'https://expressjs-stripe-paypal.onrender.com';
 
 function testStripe() {
     try {
         const requestData = JSON.parse(document.getElementById('stripeRequest').value);
-        fetch(BASE_URL + '/api/stripe/create-session', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify(requestData)
-        })
-        .then(r => r.json())
-        .then(data => {
+        axios.post(BASE_URL + '/api/stripe/create-session', requestData)
+        .then(({data})=>{
             if(data.success && data.url) window.location.href = data.url;
             else alert('Stripe Error: ' + JSON.stringify(data.error || data));
-        }).catch(e=>alert('Error: '+e.message));
+        })
+        .catch(e=>alert('Error: '+e.message));
     } catch(e){ alert('Invalid JSON: '+e.message); }
 }
 
 function testPayPal() {
     try {
         const items = JSON.parse(document.getElementById('paypalItems').value);
-        fetch(BASE_URL + '/api/paypal/create-order', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({items:items})
-        })
-        .then(r=>r.json())
-        .then(data=>{
+        axios.post(BASE_URL + '/api/paypal/create-order', {items})
+        .then(({data})=>{
             if(data.id && data.links){
                 const link = data.links.find(l=>l.rel==='approve');
                 if(link) window.location.href = link.href;
                 else alert('No PayPal approval link found');
             } else alert('PayPal Error: '+JSON.stringify(data.error || data));
-        }).catch(e=>alert('Error: '+e.message));
+        })
+        .catch(e=>alert('Error: '+e.message));
     } catch(e){ alert('Invalid JSON: '+e.message); }
 }
 
 function checkHealth() {
-    fetch(BASE_URL+'/api/health')
-        .then(r=>r.json())
-        .then(data=>{
-            document.getElementById('status').innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>';
-        }).catch(e=>{
-            document.getElementById('status').innerHTML='Error: '+e.message;
+    const statusEl = document.getElementById('status');
+    statusEl.innerHTML = '<span class="loader"></span>Remote API is starting...';
+    axios.get(BASE_URL+'/api/health', {timeout:5000})
+        .then(({data})=>{
+            statusEl.innerHTML = '<span class="status-up">API is UP ✅</span>\n<pre>'+JSON.stringify(data,null,2)+'</pre>';
+        })
+        .catch(e=>{
+            statusEl.innerHTML = '<span class="loader"></span>Remote API is starting... retrying in 5 seconds';
+            setTimeout(checkHealth, 5000); // retry every 5 seconds
         });
 }
+
+// Start health check on page load
+window.addEventListener('DOMContentLoaded', checkHealth);
 </script>
 
 </body>
 </html>
+

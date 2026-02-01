@@ -688,6 +688,59 @@ app.get("/", (req, res) => {
   });
 });
 
+// ========================
+// STRIPE WEBHOOK
+// ========================
+const bodyParser = require("body-parser");
+
+// Stripe requires the raw body to verify the signature
+app.post("/api/stripe/webhook", bodyParser.raw({ type: "application/json" }), (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.error("❌ STRIPE_WEBHOOK_SECRET is not set!");
+    return res.status(500).send("Webhook secret not configured");
+  }
+
+  let event;
+
+  try {
+    // Verify webhook signature
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    console.log("✅ Stripe webhook verified:", event.type);
+
+    // Handle checkout.session.completed
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      console.log("🛒 Checkout session completed:");
+      console.log(session);
+
+      const cartId = session.metadata?.cartId;
+      const customerEmail = session.customer_email;
+      const amountTotal = session.amount_total / 100; // convert cents/pence
+      const currency = session.currency.toUpperCase();
+
+      console.log(`CartID: ${cartId}, Email: ${customerEmail}, Amount: ${amountTotal} ${currency}`);
+
+      // TODO: Update your database here using cartId
+      // Example: await db.orders.update({ cartId }, { status: 'paid', paymentData: session });
+    }
+
+    // Log all events
+    else {
+      console.log("Received Stripe event:", event.type);
+    }
+
+    // Respond to Stripe
+    res.status(200).send({ received: true });
+  } catch (err) {
+    console.error("❌ Webhook verification failed:", err.message);
+    res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
