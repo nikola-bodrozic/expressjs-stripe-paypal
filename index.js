@@ -305,34 +305,13 @@ app.options("*", cors(corsOptions));
 // ========================
 // RECONCILIATION ENDPOINTS
 // ========================
-app.get("/api/reconciliation", (req, res) => {
-  res.json({
-    success: true,
-    count: cartReconciliation.length,
-    data: cartReconciliation
-  });
-});
-
-app.get("/api/reconciliation/:cartId", (req, res) => {
-  const { cartId } = req.params;
-  const cart = cartReconciliation.find(c => c.cartId === cartId);
-  
-  if (!cart) {
-    return res.status(404).json({
-      success: false,
-      error: "Cart not found in reconciliation tracking"
-    });
-  }
-  
-  res.json({
-    success: true,
-    data: cart
-  });
-});
-
+// ========================
+// RECONCILIATION ENDPOINTS
+// ========================
 app.get("/api/reconciliation/stats", (req, res) => {
   const confirmed = cartReconciliation.filter(c => c.status === 'confirmed').length;
   const pending = cartReconciliation.filter(c => c.status === 'created').length;
+  const failed = cartReconciliation.filter(c => c.status === 'failed').length;
   
   // Calculate average confirmation time
   const confirmedCarts = cartReconciliation.filter(c => c.status === 'confirmed' && c.createdAt && c.confirmedAt);
@@ -348,14 +327,106 @@ app.get("/api/reconciliation/stats", (req, res) => {
     avgConfirmationTime = totalTime / confirmedCarts.length;
   }
   
+  // Find recent carts (last 24 hours)
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recentCarts = cartReconciliation.filter(c => 
+    new Date(c.createdAt) > twentyFourHoursAgo
+  );
+  
   res.json({
     success: true,
     data: {
       total: cartReconciliation.length,
       confirmed,
       pending,
-      confirmationRate: cartReconciliation.length > 0 ? (confirmed / cartReconciliation.length * 100).toFixed(2) + '%' : '0%',
-      avgConfirmationTime: avgConfirmationTime > 0 ? timeDifference(new Date(0), new Date(avgConfirmationTime)) : 'N/A'
+      failed,
+      recent24h: recentCarts.length,
+      confirmationRate: cartReconciliation.length > 0 ? ((confirmed / cartReconciliation.length) * 100).toFixed(2) + '%' : '0%',
+      avgConfirmationTimeMs: Math.round(avgConfirmationTime),
+      avgConfirmationTime: avgConfirmationTime > 0 ? timeDifference(new Date(0), new Date(avgConfirmationTime)) : 'N/A',
+      bySource: {
+        stripe: cartReconciliation.filter(c => c.source === 'stripe-checkout').length,
+        paypal: cartReconciliation.filter(c => c.source === 'paypal-checkout').length,
+        unknown: cartReconciliation.filter(c => !c.source || c.source === 'unknown').length
+      }
+    }
+  });
+});
+
+app.get("/api/reconciliation/cart/:cartId", (req, res) => {
+  const { cartId } = req.params;
+  const cart = cartReconciliation.find(c => c.cartId === cartId);
+  
+  if (!cart) {
+    return res.status(404).json({
+      success: false,
+      error: "Cart not found in reconciliation tracking"
+    });
+  }
+  
+  // Calculate time differences
+  let timeToConfirmation = null;
+  if (cart.createdAt && cart.confirmedAt) {
+    const start = new Date(cart.createdAt);
+    const end = new Date(cart.confirmedAt);
+    timeToConfirmation = timeDifference(start, end);
+  }
+  
+  res.json({
+    success: true,
+    data: {
+      ...cart,
+      timeToConfirmation,
+      // Add additional calculated fields
+      isRecent: new Date(cart.createdAt) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+    }
+  });
+});
+
+app.get("/api/reconciliation/info", (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = parseInt(req.query.offset) || 0;
+  const status = req.query.status; // 'created', 'confirmed', 'failed'
+  const source = req.query.source; // 'stripe-checkout', 'paypal-checkout'
+  
+  let filteredCarts = [...cartReconciliation];
+  
+  // Apply filters
+  if (status) {
+    filteredCarts = filteredCarts.filter(c => c.status === status);
+  }
+  
+  if (source) {
+    filteredCarts = filteredCarts.filter(c => c.source === source);
+  }
+  
+  // Sort by most recent first
+  filteredCarts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
+  // Apply pagination
+  const paginatedCarts = filteredCarts.slice(offset, offset + limit);
+  
+  res.json({
+    success: true,
+    data: {
+      total: filteredCarts.length,
+      limit,
+      offset,
+      hasMore: (offset + limit) < filteredCarts.length,
+      carts: paginatedCarts.map(cart => ({
+        cartId: cart.cartId,
+        source: cart.source,
+        status: cart.status,
+        createdAt: cart.createdAt,
+        confirmedAt: cart.confirmedAt,
+        confirmedBy: cart.confirmedBy,
+        metadata: {
+          totalItems: cart.metadata?.totalItems || 0,
+          email: cart.metadata?.email || 'not provided',
+          detectedCountry: cart.metadata?.detectedCountry || 'unknown'
+        },
+        eventsCount: cart.events?.length || 0
+      }))
     }
   });
 });
