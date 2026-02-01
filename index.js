@@ -46,10 +46,7 @@ let paypalTokenCache = {
 
 // Get PayPal access token with caching
 async function getPayPalAccessToken() {
-  if (
-    paypalTokenCache.token &&
-    Date.now() < paypalTokenCache.expiresAt - 60000
-  ) {
+  if (paypalTokenCache.token && Date.now() < paypalTokenCache.expiresAt - 60000) {
     return paypalTokenCache.token;
   }
 
@@ -70,7 +67,6 @@ async function getPayPalAccessToken() {
       },
     );
 
-    // Cache the token
     paypalTokenCache = {
       token: response.data.access_token,
       expiresAt: Date.now() + response.data.expires_in * 1000,
@@ -113,7 +109,6 @@ function getClientIp(req) {
 
 // Helper function to get shipping options based on country
 function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
-  // European countries
   const europeanCountries = [
     "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
     "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
@@ -174,7 +169,9 @@ function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
   return sortedShippingOptions;
 }
 
-// CORS configuration
+// ========================
+// CORS
+// ========================
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost",
@@ -185,28 +182,30 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log("⚠️ CORS blocked origin:", origin);
-      callback(null, true); // Allow for development
-    }
+    if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+    else callback(null, true); // dev only
   },
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
   maxAge: 3600,
 };
 
+// Apply CORS
 app.use(cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Handle preflight requests
+// Only parse JSON for non-webhook routes
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/stripe/webhook") return next();
+  express.json()(req, res, next);
+  express.urlencoded({ extended: true })(req, res, next);
+});
+
+// Handle preflight
 app.options("*", cors(corsOptions));
 
 // ========================
-// HEALTH & INFO ENDPOINTS
+// HEALTH & INFO
 // ========================
 app.get("/api/health", (req, res) => {
   res.json({
@@ -223,12 +222,10 @@ app.get("/api/health", (req, res) => {
 // ========================
 // PAYPAL ENDPOINTS
 // ========================
-// Create PayPal order using Stripe prices
 app.post("/api/paypal/create-order", async (req, res) => {
   const cartId = uuidv4();
   try {
     const { items } = req.body;
-
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items array is required" });
     }
@@ -237,20 +234,15 @@ app.post("/api/paypal/create-order", async (req, res) => {
     let totalCents = 0;
     let currency = null;
 
-    // Loop through Stripe prices
     for (const item of items) {
-      // Get price data
       const { data: price } = await axios.get(
         `https://api.stripe.com/v1/prices/${item.priceId}`,
         { auth: { username: config.STRIPE_KEY, password: "" } },
       );
 
-      // Validate
-      if (!price.unit_amount || !price.currency) {
+      if (!price.unit_amount || !price.currency)
         return res.status(400).json({ error: "Invalid Stripe price" });
-      }
 
-      // Get title from product
       let title = "Product";
       if (price.product) {
         try {
@@ -259,28 +251,20 @@ app.post("/api/paypal/create-order", async (req, res) => {
             { auth: { username: config.STRIPE_KEY, password: "" } },
           );
           title = product.name || "Product";
-        } catch (e) {
-          // Keep default title
-        }
+        } catch {}
       }
 
-      // Check currency consistency
       const itemCurrency = price.currency.toUpperCase();
       if (!currency) currency = itemCurrency;
-      else if (currency !== itemCurrency) {
+      else if (currency !== itemCurrency)
         return res.status(400).json({ error: "Mixed currencies are not allowed" });
-      }
 
-      // Add to totals and items
       const qty = Number(item.quantity) || 1;
       totalCents += price.unit_amount * qty;
 
       paypalItems.push({
         name: title,
-        unit_amount: {
-          currency_code: currency,
-          value: (price.unit_amount / 100).toFixed(2),
-        },
+        unit_amount: { currency_code: currency, value: (price.unit_amount / 100).toFixed(2) },
         quantity: qty.toString(),
       });
     }
@@ -296,16 +280,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
           {
             reference_id: cartId,
             custom_id: cartId,
-            amount: {
-              currency_code: currency,
-              value: totalAmount,
-              breakdown: {
-                item_total: {
-                  currency_code: currency,
-                  value: totalAmount,
-                },
-              },
-            },
+            amount: { currency_code: currency, value: totalAmount, breakdown: { item_total: { currency_code: currency, value: totalAmount } } },
             items: paypalItems,
           },
         ],
@@ -316,12 +291,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
           user_action: "PAY_NOW",
         },
       },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
 
     console.log(`PayPal ${config.PAYPAL_ENV} order created: ${paypalResponse.data.id}`);
@@ -332,7 +302,6 @@ app.post("/api/paypal/create-order", async (req, res) => {
   }
 });
 
-// Capture PayPal order
 app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -341,92 +310,56 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
     const response = await axios.post(
       `${PAYPAL_API_BASE}/v2/checkout/orders/${orderId}/capture`,
       {},
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
 
     console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
-    res.json({
-      success: true,
-      data: response.data
-    });
+    res.json({ success: true, data: response.data });
   } catch (err) {
     console.error(`PayPal ${config.PAYPAL_ENV} capture error:`, err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: "Failed to capture PayPal order",
-      details: err.response?.data || err.message
-    });
+    res.status(500).json({ success: false, error: "Failed to capture PayPal order", details: err.response?.data || err.message });
   }
 });
 
 // ========================
-// STRIPE ENDPOINTS (RESTful)
+// STRIPE ENDPOINTS
 // ========================
-// GET all products with prices
+// GET all products
 app.get("/api/stripe/products", async (req, res) => {
   try {
-    const prices = await stripe.prices.list({
-      expand: ["data.product"],
-    });
+    const prices = await stripe.prices.list({ expand: ["data.product"] });
+    const activePrices = prices.data.filter(p => p.active && p.product.active);
 
-    const activePrices = prices.data.filter(
-      (price) => price.active && price.product.active,
-    );
+    const products = activePrices.map(price => ({
+      id: price.id,
+      price: price.unit_amount / 100,
+      currency: price.currency.toUpperCase(),
+      description: price.product.description,
+      imgFileName: price.product.metadata?.imgFileName || "",
+      productId: price.product.id,
+      productName: price.product.name,
+      productDescription: price.product.description,
+      productMetadata: price.product.metadata,
+      billingScheme: price.billing_scheme,
+      type: price.type,
+      recurring: price.recurring,
+    }));
 
-    const products = activePrices.map((price) => {
-      const imgFileName = price.product.metadata?.imgFileName || "";
-
-      return {
-        id: price.id,
-        price: price.unit_amount / 100,
-        currency: price.currency.toUpperCase(),
-        description: price.product.description,
-        imgFileName: imgFileName,
-        productId: price.product.id,
-        productName: price.product.name,
-        productDescription: price.product.description,
-        productMetadata: price.product.metadata,
-        billingScheme: price.billing_scheme,
-        type: price.type,
-        recurring: price.recurring,
-      };
-    });
-
-    res.json({
-      success: true,
-      count: products.length,
-      data: products
-    });
+    res.json({ success: true, count: products.length, data: products });
   } catch (error) {
     console.error("Stripe products error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch products",
-      details: error.message
-    });
+    res.status(500).json({ success: false, error: "Failed to fetch products", details: error.message });
   }
 });
 
-// GET single product by price ID
+// GET single product
 app.get("/api/stripe/products/:priceId", async (req, res) => {
   try {
     const { priceId } = req.params;
+    const price = await stripe.prices.retrieve(priceId, { expand: ["product"] });
 
-    const price = await stripe.prices.retrieve(priceId, {
-      expand: ["product"],
-    });
-
-    if (!price.active || !price.product.active) {
-      return res.status(404).json({
-        success: false,
-        error: "Product not found or inactive"
-      });
-    }
+    if (!price.active || !price.product.active)
+      return res.status(404).json({ success: false, error: "Product not found or inactive" });
 
     const product = {
       id: price.id,
@@ -443,17 +376,10 @@ app.get("/api/stripe/products/:priceId", async (req, res) => {
       recurring: price.recurring,
     };
 
-    res.json({
-      success: true,
-      data: product
-    });
+    res.json({ success: true, data: product });
   } catch (error) {
     console.error("Stripe product error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch product",
-      details: error.message
-    });
+    res.status(500).json({ success: false, error: "Failed to fetch product", details: error.message });
   }
 });
 
@@ -462,210 +388,81 @@ app.post("/api/stripe/create-session", async (req, res) => {
   const cartId = uuidv4();
   try {
     const { items, email } = req.body;
+    if (!items || !Array.isArray(items)) throw new Error("Invalid or missing items data");
 
-    if (!items || !Array.isArray(items)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid or missing items data"
-      });
-    }
-
-    // Validate items
     const priceIds = [];
     const line_items = items.map((item, index) => {
-      if (!item.id || !item.quantity) {
-        throw new Error(`Item at index ${index} must have an id and quantity`);
-      }
-      if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
-        throw new Error(
-          `Item at index ${index}: quantity must be an integer greater than 0`,
-        );
-      }
-      if (!/^price_[a-zA-Z0-9]{24}$/.test(item.id)) {
-        throw new Error(
-          `Item at index ${index}: invalid Stripe price ID format`,
-        );
-      }
+      if (!item.id || !item.quantity) throw new Error(`Item at index ${index} must have an id and quantity`);
+      if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new Error(`Item at index ${index}: quantity must be > 0`);
+      if (!/^price_[a-zA-Z0-9]{24}$/.test(item.id)) throw new Error(`Item at index ${index}: invalid Stripe price ID format`);
       priceIds.push(item.id);
-      return {
-        price: item.id,
-        quantity: item.quantity,
-      };
+      return { price: item.id, quantity: item.quantity };
     });
 
-    // Shipping rate IDs
-    const shippingRateIds = {
-      GB: config.GB,
-      EU: config.EU,
-      US: config.US,
-      AU: config.AU,
-      CA: config.CA,
-    };
-
-    // Detect country from IP
+    const shippingRateIds = { GB: config.GB, EU: config.EU, US: config.US, AU: config.AU, CA: config.CA };
     const ip = getClientIp(req);
-    let detectedCountry = "";
-    try {
-      detectedCountry = await detectCountryFromIP(ip);
-    } catch (error) {
-      console.warn("Could not detect country:", error.message);
-    }
-
-    // Get shipping options
+    const detectedCountry = await detectCountryFromIP(ip);
     const sortedShippingOptions = getShippingOptionsForCountry(detectedCountry, shippingRateIds);
 
-    // European countries for allowed shipping
-    const europeanCountries = [
-      "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
-      "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
-    ];
-    const allowedCountries = ["GB", "US", "AU", "CA", ...europeanCountries];
+    const europeanCountries = ["AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"];
+    const allowedCountries = ["GB","US","AU","CA", ...europeanCountries];
 
-    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      line_items: line_items,
+      line_items,
       mode: "payment",
-
       success_url: `${config.DOMAIN}/success-s.php?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${config.DOMAIN}/cancel.php`,
-
       customer_email: email || null,
-
-      phone_number_collection: {
-        enabled: true,
-      },
-
-      shipping_address_collection: {
-        allowed_countries: allowedCountries,
-      },
-
+      phone_number_collection: { enabled: true },
+      shipping_address_collection: { allowed_countries: allowedCountries },
       shipping_options: sortedShippingOptions,
-
       billing_address_collection: "required",
       allow_promotion_codes: true,
-
-      // ✅ THIS IS FOR checkout.session.completed
-      metadata: {
-        cartId,
-        priceIds: priceIds.join(","),
-        detectedCountry: detectedCountry || "unknown",
-      },
-
-      // ✅ THIS IS FOR payment_intent.* webhooks (IMPORTANT)
-      payment_intent_data: {
-        metadata: {
-          cartId,
-        },
-      },
+      metadata: { cartId, priceIds: priceIds.join(","), detectedCountry: detectedCountry || "unknown" },
+      payment_intent_data: { metadata: { cartId } },
     });
 
     console.log(`Stripe session created: ${session.id}`);
-    res.json({
-      success: true,
-      sessionId: session.id,
-      url: session.url,
-      expiresAt: session.expires_at,
-      paymentStatus: session.payment_status,
-      metadata: session.metadata
-    });
+    res.json({ success: true, sessionId: session.id, url: session.url, expiresAt: session.expires_at, paymentStatus: session.payment_status, metadata: session.metadata });
   } catch (error) {
     console.error("Stripe create session error:", error.message);
-    const statusCode = error.statusCode || 500;
-    res.status(statusCode).json({
-      success: false,
-      error: error.message,
-      code: statusCode,
-    });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 });
 
-// Get Stripe session by ID
+// Get Stripe session
 app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["line_items.data.price.product", "payment_intent"] });
 
-    const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ["line_items.data.price.product", "payment_intent"],
-    });
-
-    res.json({
-      success: true,
-      data: {
-        id: session.id,
-        paymentStatus: session.payment_status,
-        status: session.status,
-        customerEmail: session.customer_email,
-        customerDetails: session.customer_details,
-        amountTotal: session.amount_total,
-        amountSubtotal: session.amount_subtotal,
-        shippingCost: session.shipping_cost,
-        currency: session.currency,
-        expiresAt: session.expires_at,
-        metadata: session.metadata,
-        lineItems: session.line_items,
-        shippingAddress: session.shipping_details?.address,
-        billingAddress: session.customer_details?.address,
-        paymentIntent: session.payment_intent
-      }
-    });
+    res.json({ success: true, data: { id: session.id, paymentStatus: session.payment_status, status: session.status, customerEmail: session.customer_email, customerDetails: session.customer_details, amountTotal: session.amount_total, amountSubtotal: session.amount_subtotal, shippingCost: session.shipping_cost, currency: session.currency, expiresAt: session.expires_at, metadata: session.metadata, lineItems: session.line_items, shippingAddress: session.shipping_details?.address, billingAddress: session.customer_details?.address, paymentIntent: session.payment_intent } });
   } catch (error) {
     console.error("Stripe session error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch session",
-      details: error.message
-    });
+    res.status(500).json({ success: false, error: "Failed to fetch session", details: error.message });
   }
 });
 
-// Verify Stripe payment status
+// Verify payment
 app.post("/api/stripe/verify-payment", async (req, res) => {
   try {
     const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ success: false, error: "Session ID is required" });
 
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: "Session ID is required"
-      });
-    }
-
-    const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ["payment_intent"],
-    });
-
+    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["payment_intent"] });
     const isPaid = session.payment_status === "paid";
     const isCompleted = session.status === "complete";
 
-    res.json({
-      success: true,
-      data: {
-        sessionId: session.id,
-        paymentStatus: session.payment_status,
-        status: session.status,
-        isPaid: isPaid,
-        isCompleted: isCompleted,
-        amountTotal: session.amount_total,
-        currency: session.currency,
-        customerEmail: session.customer_email,
-        paymentIntentId: session.payment_intent?.id,
-        paymentIntentStatus: session.payment_intent?.status,
-        metadata: session.metadata
-      }
-    });
+    res.json({ success: true, data: { sessionId: session.id, paymentStatus: session.payment_status, status: session.status, isPaid, isCompleted, amountTotal: session.amount_total, currency: session.currency, customerEmail: session.customer_email, paymentIntentId: session.payment_intent?.id, paymentIntentStatus: session.payment_intent?.status, metadata: session.metadata } });
   } catch (error) {
     console.error("Stripe verify payment error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Failed to verify payment",
-      details: error.message
-    });
+    res.status(500).json({ success: false, error: "Failed to verify payment", details: error.message });
   }
 });
 
 // ========================
-// ROOT & ERROR HANDLING
+// ROOT
 // ========================
 app.get("/", (req, res) => {
   res.json({
@@ -677,11 +474,11 @@ app.get("/", (req, res) => {
         product: "GET /api/stripe/products/:priceId",
         createSession: "POST /api/stripe/create-session",
         getSession: "GET /api/stripe/sessions/:sessionId",
-        verifyPayment: "POST /api/stripe/verify-payment"
+        verifyPayment: "POST /api/stripe/verify-payment",
       },
       paypal: {
         createOrder: "POST /api/paypal/create-order",
-        captureOrder: "POST /api/paypal/capture-order/:orderId"
+        captureOrder: "POST /api/paypal/capture-order/:orderId",
       },
       health: "GET /api/health",
     }
@@ -689,12 +486,9 @@ app.get("/", (req, res) => {
 });
 
 // ========================
-// STRIPE WEBHOOK
+// STRIPE WEBHOOK (express.raw for Render)
 // ========================
-const bodyParser = require("body-parser");
-
-// Stripe requires the raw body to verify the signature
-app.post("/api/stripe/webhook", bodyParser.raw({ type: "application/json" }), (req, res) => {
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res) => {
   const sig = req.headers["stripe-signature"];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -703,37 +497,23 @@ app.post("/api/stripe/webhook", bodyParser.raw({ type: "application/json" }), (r
     return res.status(500).send("Webhook secret not configured");
   }
 
-  let event;
-
   try {
-    // Verify webhook signature
-    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     console.log("✅ Stripe webhook verified:", event.type);
 
-    // Handle checkout.session.completed
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-
-      console.log("🛒 Checkout session completed:");
-      console.log(session);
-
+      console.log("🛒 Checkout session completed:", session);
       const cartId = session.metadata?.cartId;
       const customerEmail = session.customer_email;
-      const amountTotal = session.amount_total / 100; // convert cents/pence
+      const amountTotal = session.amount_total / 100;
       const currency = session.currency.toUpperCase();
-
       console.log(`CartID: ${cartId}, Email: ${customerEmail}, Amount: ${amountTotal} ${currency}`);
-
-      // TODO: Update your database here using cartId
-      // Example: await db.orders.update({ cartId }, { status: 'paid', paymentData: session });
-    }
-
-    // Log all events
-    else {
+      // TODO: Update your database
+    } else {
       console.log("Received Stripe event:", event.type);
     }
 
-    // Respond to Stripe
     res.status(200).send({ received: true });
   } catch (err) {
     console.error("❌ Webhook verification failed:", err.message);
@@ -741,25 +521,19 @@ app.post("/api/stripe/webhook", bodyParser.raw({ type: "application/json" }), (r
   }
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: "Endpoint not found"
-  });
-});
+// ========================
+// 404 & ERROR HANDLING
+// ========================
+app.use((req, res) => res.status(404).json({ success: false, error: "Endpoint not found" }));
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.stack);
-  res.status(500).json({
-    success: false,
-    error: "Internal server error",
-    code: 500,
-  });
+  res.status(500).json({ success: false, error: "Internal server error", code: 500 });
 });
 
-// Start server
+// ========================
+// START SERVER
+// ========================
 app.listen(port, "0.0.0.0", () => {
   console.log(`Express.js API is running on port ${port}`);
   console.log(`Express.js API is at: ${config.DOMAIN}:${port}`);
@@ -770,3 +544,4 @@ app.listen(port, "0.0.0.0", () => {
 });
 
 module.exports = app;
+
