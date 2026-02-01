@@ -2,10 +2,11 @@
   "name": "express-api",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {
-    "start": "nodemon index.js",
-    "test": "jest"
-  },
+"scripts": {
+  "start": "node index.js",
+  "dev": "nodemon index.js",
+  "test": "jest"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
