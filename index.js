@@ -1,4 +1,4 @@
-// index.js - Combined Stripe + PayPal
+// index.js - Combined Stripe + PayPal (with Webhook)
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -21,6 +21,8 @@ const config = {
   US: process.env.SHIPPING_RATE_US,
   AU: process.env.SHIPPING_RATE_AU,
   CA: process.env.SHIPPING_RATE_CA,
+  // Webhook secret from environment
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
 };
 
 const cartId = uuidv4();
@@ -199,13 +201,134 @@ const corsOptions = {
   maxAge: 3600,
 };
 
-app.use(cors(corsOptions));
-app.use(express.json());
+// IMPORTANT: Express.json() must be configured BEFORE the webhook endpoint
+// For webhooks, we need the raw body for signature verification
+// We'll configure it conditionally for the webhook endpoint
+
+// Parse JSON for all routes except webhook
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/stripe/webhook') {
+    next(); // Skip JSON parsing for webhook
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(cors(corsOptions));
 
 // Handle preflight requests
 app.options("*", cors(corsOptions));
+
+// ========================
+// STRIPE WEBHOOK ENDPOINT
+// ========================
+app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req, res) => {
+  console.log("🔔 Stripe Webhook Received!");
+  
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = config.STRIPE_WEBHOOK_SECRET;
+  
+  // For now, just log the raw body and headers
+  console.log("Webhook Headers:", {
+    'stripe-signature': sig,
+    'content-type': req.headers['content-type'],
+    'user-agent': req.headers['user-agent']
+  });
+  
+  console.log("Webhook Raw Body:", req.body.toString());
+  
+  let event;
+  
+  try {
+    // Try to construct the event from the payload and signature
+    if (webhookSecret) {
+      try {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        console.log("✅ Webhook signature verified successfully");
+      } catch (err) {
+        console.error("❌ Webhook signature verification failed:", err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+      }
+    } else {
+      // If no webhook secret is configured, create a basic event object from the raw body
+      console.warn("⚠️ STRIPE_WEBHOOK_SECRET not set - skipping signature verification");
+      try {
+        event = JSON.parse(req.body.toString());
+      } catch (err) {
+        console.error("❌ Failed to parse webhook body:", err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+      }
+    }
+    
+    // Log the full event
+    console.log("📋 Webhook Event Details:");
+    console.log("- Event ID:", event.id || "N/A");
+    console.log("- Event Type:", event.type || "N/A");
+    console.log("- Created:", event.created ? new Date(event.created * 1000).toISOString() : "N/A");
+    console.log("- Livemode:", event.livemode || false);
+    
+    // Handle specific event types
+    if (event.type === 'checkout.session.completed') {
+      console.log("🎉 checkout.session.completed event received!");
+      
+      const session = event.data.object;
+      console.log("Session Details:");
+      console.log("- Session ID:", session.id);
+      console.log("- Payment Status:", session.payment_status);
+      console.log("- Customer Email:", session.customer_email);
+      console.log("- Amount Total:", session.amount_total ? `$${(session.amount_total / 100).toFixed(2)}` : "N/A");
+      console.log("- Currency:", session.currency?.toUpperCase());
+      console.log("- Metadata:", session.metadata);
+      
+      // Check if metadata exists
+      if (session.metadata) {
+        console.log("Metadata Details:");
+        console.log("  - cartId:", session.metadata.cartId || "N/A");
+        console.log("  - priceIds:", session.metadata.priceIds || "N/A");
+        console.log("  - detectedCountry:", session.metadata.detectedCountry || "N/A");
+      }
+      
+      // You could add additional processing here, such as:
+      // - Update order status in your database
+      // - Send confirmation email
+      // - Update inventory
+      // - Trigger fulfillment processes
+      
+      console.log("✅ checkout.session.completed processed");
+    }
+    
+    // Handle other event types
+    else if (event.type === 'payment_intent.succeeded') {
+      console.log("💰 payment_intent.succeeded event received");
+      const paymentIntent = event.data.object;
+      console.log("- Payment Intent ID:", paymentIntent.id);
+      console.log("- Amount:", paymentIntent.amount ? `$${(paymentIntent.amount / 100).toFixed(2)}` : "N/A");
+      console.log("- Customer:", paymentIntent.customer || "N/A");
+      console.log("- Metadata:", paymentIntent.metadata);
+    }
+    
+    else if (event.type === 'payment_intent.payment_failed') {
+      console.log("❌ payment_intent.payment_failed event received");
+      const paymentIntent = event.data.object;
+      console.log("- Payment Intent ID:", paymentIntent.id);
+      console.log("- Last Payment Error:", paymentIntent.last_payment_error || "N/A");
+    }
+    
+    else {
+      console.log(`ℹ️ Received unhandled event type: ${event.type}`);
+    }
+    
+    // Return a response to acknowledge receipt of the event
+    res.json({ received: true });
+    
+  } catch (err) {
+    console.error("❌ Webhook processing error:", err.message);
+    console.error(err.stack);
+    res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+});
 
 // ========================
 // HEALTH & INFO ENDPOINTS
@@ -217,7 +340,8 @@ app.get("/api/health", (req, res) => {
     services: {
       stripe: "active",
       paypal: config.PAYPAL_ENV,
-      environment: process.env.NODE_ENV || "development"
+      environment: process.env.NODE_ENV || "development",
+      webhook: config.STRIPE_WEBHOOK_SECRET ? "configured" : "not configured"
     }
   });
 });
@@ -545,7 +669,7 @@ app.post("/api/stripe/create-session", async (req, res) => {
       billing_address_collection: "required",
       allow_promotion_codes: true,
 
-      // ✅ THIS IS FOR checkout.session.completed
+      // ✅ THIS IS FOR checkout.session.completed webhook
       metadata: {
         cartId,
         priceIds: priceIds.join(","),
@@ -561,6 +685,8 @@ app.post("/api/stripe/create-session", async (req, res) => {
     });
 
     console.log(`Stripe session created: ${session.id}`);
+    console.log(`ℹ️ Webhook will be sent to: ${config.DOMAIN}/api/stripe/webhook when payment is complete`);
+    
     res.json({
       success: true,
       sessionId: session.id,
@@ -671,13 +797,15 @@ app.get("/", (req, res) => {
   res.json({
     message: "Stripe & PayPal Integration API",
     version: "2.0",
+    webhook: config.STRIPE_WEBHOOK_SECRET ? "active" : "not configured",
     endpoints: {
       stripe: {
         products: "GET /api/stripe/products",
         product: "GET /api/stripe/products/:priceId",
         createSession: "POST /api/stripe/create-session",
         getSession: "GET /api/stripe/sessions/:sessionId",
-        verifyPayment: "POST /api/stripe/verify-payment"
+        verifyPayment: "POST /api/stripe/verify-payment",
+        webhook: "POST /api/stripe/webhook"
       },
       paypal: {
         createOrder: "POST /api/paypal/create-order",
@@ -714,6 +842,8 @@ app.listen(port, "0.0.0.0", () => {
   console.log(`Domain for PHP/HTML files: ${config.DOMAIN}`);
   console.log(`Store: ${config.STORE_NAME}`);
   console.log(`✅ Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`);
+  console.log(`🔔 Stripe Webhook Endpoint: ${config.DOMAIN}/api/stripe/webhook`);
+  console.log(`⚠️ Webhook Status: ${config.STRIPE_WEBHOOK_SECRET ? '✅ Configured' : '❌ Not configured - set STRIPE_WEBHOOK_SECRET env variable'}`);
 });
 
 module.exports = app;
