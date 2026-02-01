@@ -21,7 +21,7 @@ const config = {
   US: process.env.SHIPPING_RATE_US,
   AU: process.env.SHIPPING_RATE_AU,
   CA: process.env.SHIPPING_RATE_CA,
-  // Webhook secret from environment
+  API_BASE_URL: process.env.API_BASE_URL,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
 };
 
@@ -229,15 +229,6 @@ app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async
   
   const sig = req.headers['stripe-signature'];
   const webhookSecret = config.STRIPE_WEBHOOK_SECRET;
-  
-  // For now, just log the raw body and headers
-  console.log("Webhook Headers:", {
-    'stripe-signature': sig,
-    'content-type': req.headers['content-type'],
-    'user-agent': req.headers['user-agent']
-  });
-  
-  console.log("Webhook Raw Body:", req.body.toString());
   
   let event;
   
@@ -837,7 +828,7 @@ app.use((err, req, res, next) => {
 // Start server
 app.listen(port, "0.0.0.0", () => {
   console.log(`Express.js API is running on port ${port}`);
-  console.log(`Express.js API is at: ${config.DOMAIN}:${port}`);
+  console.log(`Express.js API is at: ${config.API_BASE_URL}:${port}`);
   console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
   console.log(`Domain for PHP/HTML files: ${config.DOMAIN}`);
   console.log(`Store: ${config.STORE_NAME}`);
