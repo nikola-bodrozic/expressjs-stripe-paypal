@@ -12,11 +12,10 @@ const port = process.env.PORT || 3000;
 
 // Load configuration from environment variables
 const config = {
-  STRIPE_KEY: process.env.STRIPE_KEY || process.env.STRIPE_SRV_KEY,
-  DOMAIN: "http://localhost",
+  STRIPE_KEY: process.env.STRIPE_KEY,
+  DOMAIN: process.env.DOMAIN,
   STORE_NAME: process.env.STORE_NAME || "My Awesome Store",
   PAYPAL_ENV: process.env.PAYPAL_ENV || "sandbox",
-  // Shipping rates
   GB: process.env.SHIPPING_RATE_GB,
   EU: process.env.SHIPPING_RATE_EU,
   US: process.env.SHIPPING_RATE_US,
