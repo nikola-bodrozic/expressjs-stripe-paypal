@@ -13,8 +13,7 @@ const port = process.env.PORT || 3000;
 // Load configuration from environment variables
 const config = {
   STRIPE_KEY: process.env.STRIPE_KEY || process.env.STRIPE_SRV_KEY,
-  DOMAIN: process.env.DOMAIN || "http://localhost",
-  FRONT_END_HOST: process.env.FRONT_END_HOST || "http://localhost",
+  DOMAIN: "http://localhost",
   STORE_NAME: process.env.STORE_NAME || "My Awesome Store",
   PAYPAL_ENV: process.env.PAYPAL_ENV || "sandbox",
   // Shipping rates
@@ -183,7 +182,6 @@ const allowedOrigins = [
   "http://127.0.0.1",
   "http://localhost:80",
   "http://127.0.0.1:80",
-  config.FRONT_END_HOST,
 ];
 
 const corsOptions = {
@@ -313,8 +311,8 @@ app.post("/api/paypal/create-order", async (req, res) => {
           },
         ],
         application_context: {
-          return_url: `${config.FRONT_END_HOST}/success-pp.php`,
-          cancel_url: `${config.FRONT_END_HOST}/cancel.php`,
+          return_url: `${config.DOMAIN}/success-pp.php`,
+          cancel_url: `${config.DOMAIN}/cancel.php`,
           brand_name: config.STORE_NAME,
           user_action: "PAY_NOW",
         },
@@ -526,7 +524,7 @@ app.post("/api/stripe/create-session", async (req, res) => {
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card", "paypal"],
+      payment_method_types: ["card"],
       line_items: line_items,
       mode: "payment",
 
