@@ -833,7 +833,7 @@ app.listen(port, "0.0.0.0", () => {
   console.log(`Domain for PHP/HTML files: ${config.DOMAIN}`);
   console.log(`Store: ${config.STORE_NAME}`);
   console.log(`✅ Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`);
-  console.log(`🔔 Stripe Webhook Endpoint: ${config.DOMAIN}/api/stripe/webhook`);
+  console.log(`🔔 Stripe Webhook Endpoint: ${config.API_BASE_URL}/api/stripe/webhook`);
   console.log(`⚠️ Webhook Status: ${config.STRIPE_WEBHOOK_SECRET ? '✅ Configured' : '❌ Not configured - set STRIPE_WEBHOOK_SECRET env variable'}`);
 });
 
