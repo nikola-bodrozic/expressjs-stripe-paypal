@@ -25,8 +25,6 @@ const config = {
   CA: process.env.SHIPPING_RATE_CA,
 };
 
-const cartId = uuidv4();
-
 // Validate Stripe key
 if (!config.STRIPE_KEY) {
   console.error("❌ ERROR: STRIPE_KEY is not set in environment variables");
@@ -230,6 +228,7 @@ app.get("/api/health", (req, res) => {
 // ========================
 // Create PayPal order using Stripe prices
 app.post("/api/paypal/create-order", async (req, res) => {
+  const cartId = uuidv4();
   try {
     const { items } = req.body;
 
@@ -463,6 +462,7 @@ app.get("/api/stripe/products/:priceId", async (req, res) => {
 
 // Create Stripe checkout session
 app.post("/api/stripe/create-session", async (req, res) => {
+  const cartId = uuidv4();
   try {
     const { items, email } = req.body;
 
