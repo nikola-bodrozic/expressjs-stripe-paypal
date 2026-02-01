@@ -68,8 +68,13 @@ app.use(
 );
 
 // Parse JSON for all routes **except webhook**
-app.use(express.json());
+// JSON parser for all routes **except webhook**
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/stripe/webhook") return next();
+  express.json()(req, res, next);
+});
 app.use(express.urlencoded({ extended: true }));
+
 app.use(cookieParser());
 
 // ========================
