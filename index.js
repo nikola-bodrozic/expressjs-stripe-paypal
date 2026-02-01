@@ -717,6 +717,3 @@ app.listen(port, "0.0.0.0", () => {
 });
 
 module.exports = app;
----
-response from https://expressjs-stripe-paypal.onrender.com/
-{"message":"Stripe & PayPal Integration API","version":"2.0","endpoints":{"stripe":{"products":"GET /api/stripe/products","product":"GET /api/stripe/products/:priceId","createSession":"POST /api/stripe/create-session","getSession":"GET /api/stripe/sessions/:sessionId","verifyPayment":"POST /api/stripe/verify-payment"},"paypal":{"createOrder":"POST /api/paypal/create-order","captureOrder":"POST /api/paypal/capture-order/:orderId"},"health":"GET /api/health"}}
