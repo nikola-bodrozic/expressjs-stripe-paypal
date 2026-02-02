@@ -1,5 +1,4 @@
 /* eslint-disable curly */
-// index.js - Combined Stripe + PayPal (with Webhook and Reconciliation)
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -25,97 +24,6 @@ const config = {
   API_BASE_URL: process.env.API_BASE_URL,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
 };
-
-// In-memory storage for cart reconciliation
-// In production, you'd want to use a database
-const cartReconciliation = [];
-
-// Track cart creation and webhook confirmation
-function trackCartCreation(cartId, source, metadata = {}) {
-  const entry = {
-    cartId,
-    source, // 'stripe-checkout', 'paypal-checkout', etc.
-    status: "created",
-    createdAt: new Date().toISOString(),
-    confirmedAt: null,
-    metadata,
-    events: [],
-  };
-
-  cartReconciliation.push(entry);
-  console.log(`📦 Cart ${cartId} created from ${source} at ${entry.createdAt}`);
-
-  // Keep only last 1000 entries to prevent memory issues
-  if (cartReconciliation.length > 1000) {
-    cartReconciliation.shift();
-  }
-
-  return entry;
-}
-
-function trackCartConfirmation(cartId, eventType, eventData = {}) {
-  const entry = cartReconciliation.find((cart) => cart.cartId === cartId);
-
-  if (entry) {
-    entry.status = "confirmed";
-    entry.confirmedAt = new Date().toISOString();
-    entry.confirmedBy = eventType;
-    entry.confirmationData = eventData;
-
-    // Track all events for this cart
-    entry.events.push({
-      type: eventType,
-      timestamp: new Date().toISOString(),
-      data: eventData,
-    });
-
-    console.log(
-      `✅ Cart ${cartId} confirmed by ${eventType} at ${entry.confirmedAt}`,
-    );
-    console.log(
-      `   Time between creation and confirmation: ${timeDifference(entry.createdAt, entry.confirmedAt)}`,
-    );
-  } else {
-    console.log(
-      `⚠️ Cart ${cartId} confirmed but not found in reconciliation tracking`,
-    );
-
-    // Create a new entry for this cart
-    const newEntry = {
-      cartId,
-      source: "unknown",
-      status: "confirmed",
-      createdAt:
-        new Date(eventData.created * 1000).toISOString() ||
-        new Date().toISOString(),
-      confirmedAt: new Date().toISOString(),
-      confirmedBy: eventType,
-      metadata: eventData.metadata || {},
-      confirmationData: eventData,
-      events: [
-        {
-          type: eventType,
-          timestamp: new Date().toISOString(),
-          data: eventData,
-        },
-      ],
-    };
-
-    cartReconciliation.push(newEntry);
-  }
-}
-
-// Helper function to calculate time difference
-function timeDifference(start, end) {
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  const diffMs = endDate - startDate;
-
-  if (diffMs < 1000) return `${diffMs}ms`;
-  if (diffMs < 60000) return `${(diffMs / 1000).toFixed(2)}s`;
-  if (diffMs < 3600000) return `${(diffMs / 60000).toFixed(2)}min`;
-  return `${(diffMs / 3600000).toFixed(2)}h`;
-}
 
 // Validate Stripe key
 if (!config.STRIPE_KEY) {
@@ -229,147 +137,7 @@ app.use(cors(corsOptions));
 // Handle preflight requests
 app.options("*", cors(corsOptions));
 
-// ========================
-// RECONCILIATION ENDPOINTS
-// ========================
-app.get("/api/reconciliation/stats", (req, res) => {
-  const confirmed = cartReconciliation.filter(
-    (c) => c.status === "confirmed",
-  ).length;
-  const pending = cartReconciliation.filter(
-    (c) => c.status === "created",
-  ).length;
-  const failed = cartReconciliation.filter((c) => c.status === "failed").length;
 
-  // Calculate average confirmation time
-  const confirmedCarts = cartReconciliation.filter(
-    (c) => c.status === "confirmed" && c.createdAt && c.confirmedAt,
-  );
-  let avgConfirmationTime = 0;
-
-  if (confirmedCarts.length > 0) {
-    const totalTime = confirmedCarts.reduce((sum, cart) => {
-      const start = new Date(cart.createdAt);
-      const end = new Date(cart.confirmedAt);
-      return sum + (end - start);
-    }, 0);
-
-    avgConfirmationTime = totalTime / confirmedCarts.length;
-  }
-
-  // Find recent carts (last 24 hours)
-  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const recentCarts = cartReconciliation.filter(
-    (c) => new Date(c.createdAt) > twentyFourHoursAgo,
-  );
-
-  res.json({
-    success: true,
-    data: {
-      total: cartReconciliation.length,
-      confirmed,
-      pending,
-      failed,
-      recent24h: recentCarts.length,
-      confirmationRate:
-        cartReconciliation.length > 0
-          ? ((confirmed / cartReconciliation.length) * 100).toFixed(2) + "%"
-          : "0%",
-      avgConfirmationTimeMs: Math.round(avgConfirmationTime),
-      avgConfirmationTime:
-        avgConfirmationTime > 0
-          ? timeDifference(new Date(0), new Date(avgConfirmationTime))
-          : "N/A",
-      bySource: {
-        stripe: cartReconciliation.filter((c) => c.source === "stripe-checkout")
-          .length,
-        paypal: cartReconciliation.filter((c) => c.source === "paypal-checkout")
-          .length,
-        unknown: cartReconciliation.filter(
-          (c) => !c.source || c.source === "unknown",
-        ).length,
-      },
-    },
-  });
-});
-
-app.get("/api/reconciliation/cart/:cartId", (req, res) => {
-  const { cartId } = req.params;
-  const cart = cartReconciliation.find((c) => c.cartId === cartId);
-
-  if (!cart) {
-    return res.status(404).json({
-      success: false,
-      error: "Cart not found in reconciliation tracking",
-    });
-  }
-
-  // Calculate time differences
-  let timeToConfirmation = null;
-  if (cart.createdAt && cart.confirmedAt) {
-    const start = new Date(cart.createdAt);
-    const end = new Date(cart.confirmedAt);
-    timeToConfirmation = timeDifference(start, end);
-  }
-
-  res.json({
-    success: true,
-    data: {
-      ...cart,
-      timeToConfirmation,
-      // Add additional calculated fields
-      isRecent:
-        new Date(cart.createdAt) > new Date(Date.now() - 24 * 60 * 60 * 1000),
-    },
-  });
-});
-
-app.get("/api/reconciliation/info", (req, res) => {
-  const limit = parseInt(req.query.limit) || 50;
-  const offset = parseInt(req.query.offset) || 0;
-  const status = req.query.status; // 'created', 'confirmed', 'failed'
-  const source = req.query.source; // 'stripe-checkout', 'paypal-checkout'
-
-  let filteredCarts = [...cartReconciliation];
-
-  // Apply filters
-  if (status) {
-    filteredCarts = filteredCarts.filter((c) => c.status === status);
-  }
-
-  if (source) {
-    filteredCarts = filteredCarts.filter((c) => c.source === source);
-  }
-
-  // Sort by most recent first
-  filteredCarts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  // Apply pagination
-  const paginatedCarts = filteredCarts.slice(offset, offset + limit);
-
-  res.json({
-    success: true,
-    data: {
-      total: filteredCarts.length,
-      limit,
-      offset,
-      hasMore: offset + limit < filteredCarts.length,
-      carts: paginatedCarts.map((cart) => ({
-        cartId: cart.cartId,
-        source: cart.source,
-        status: cart.status,
-        createdAt: cart.createdAt,
-        confirmedAt: cart.confirmedAt,
-        confirmedBy: cart.confirmedBy,
-        metadata: {
-          totalItems: cart.metadata?.totalItems || 0,
-          email: cart.metadata?.email || "not provided",
-        },
-        eventsCount: cart.events?.length || 0,
-      })),
-    },
-  });
-});
 
 // ========================
 // STRIPE WEBHOOK ENDPOINT
@@ -428,23 +196,6 @@ app.post(
           console.log("Metadata Details:");
           console.log("  - cartId:", session.metadata.cartId || "N/A");
           console.log("  - priceIds:", session.metadata.priceIds || "N/A");
-
-          // Track cart confirmation
-          if (session.metadata.cartId) {
-            trackCartConfirmation(
-              session.metadata.cartId,
-              "checkout.session.completed",
-              {
-                sessionId: session.id,
-                paymentStatus: session.payment_status,
-                amount: session.amount_total,
-                currency: session.currency,
-                customerEmail: session.customer_email,
-                metadata: session.metadata,
-                created: session.created,
-              },
-            );
-          }
         }
         console.log("✅ checkout.session.completed processed");
       }
@@ -460,22 +211,6 @@ app.post(
         );
         console.log("- Customer:", paymentIntent.customer || "N/A");
         console.log("- Metadata:", paymentIntent.metadata);
-
-        // Track cart confirmation via payment intent
-        if (paymentIntent.metadata && paymentIntent.metadata.cartId) {
-          trackCartConfirmation(
-            paymentIntent.metadata.cartId,
-            "payment_intent.succeeded",
-            {
-              paymentIntentId: paymentIntent.id,
-              amount: paymentIntent.amount,
-              currency: paymentIntent.currency,
-              status: paymentIntent.status,
-              metadata: paymentIntent.metadata,
-              created: paymentIntent.created,
-            },
-          );
-        }
       } else if (event.type === "payment_intent.payment_failed") {
         console.log("❌ payment_intent.payment_failed event received");
         const paymentIntent = event.data.object;
@@ -484,22 +219,6 @@ app.post(
           "- Last Payment Error:",
           paymentIntent.last_payment_error || "N/A",
         );
-
-        // Track payment failure
-        if (paymentIntent.metadata && paymentIntent.metadata.cartId) {
-          const cart = cartReconciliation.find(
-            (c) => c.cartId === paymentIntent.metadata.cartId,
-          );
-          if (cart) {
-            cart.status = "failed";
-            cart.failedAt = new Date().toISOString();
-            cart.failureReason =
-              paymentIntent.last_payment_error?.message || "Payment failed";
-            console.log(
-              `❌ Cart ${paymentIntent.metadata.cartId} payment failed`,
-            );
-          }
-        }
       } else {
         console.log(`ℹ️ Received unhandled event type: ${event.type}`);
       }
@@ -512,31 +231,6 @@ app.post(
     }
   },
 );
-
-// ========================
-// HEALTH & INFO ENDPOINTS
-// ========================
-app.get("/api/health", (req, res) => {
-  const reconciliationStats = {
-    totalCarts: cartReconciliation.length,
-    confirmedCarts: cartReconciliation.filter((c) => c.status === "confirmed")
-      .length,
-    pendingCarts: cartReconciliation.filter((c) => c.status === "created")
-      .length,
-  };
-
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    services: {
-      stripe: "active",
-      paypal: config.PAYPAL_ENV,
-      environment: process.env.NODE_ENV || "development",
-      webhook: config.STRIPE_WEBHOOK_SECRET ? "configured" : "not configured",
-    },
-    reconciliation: reconciliationStats,
-  });
-});
 
 // ========================
 // PAYPAL ENDPOINTS
@@ -556,15 +250,6 @@ app.post("/api/paypal/create-order", async (req, res) => {
 
     // Generate a cart ID for PayPal
     const paypalCartId = uuidv4();
-
-    // Track PayPal cart creation
-    trackCartCreation(paypalCartId, "paypal-checkout", {
-      items: items.map((item) => ({
-        priceId: item.priceId,
-        quantity: item.quantity || 1,
-      })),
-      totalItems: items.length,
-    });
 
     // Loop through Stripe prices
     for (const item of items) {
@@ -660,13 +345,6 @@ app.post("/api/paypal/create-order", async (req, res) => {
       `PayPal ${config.PAYPAL_ENV} order created: ${paypalResponse.data.id}`,
     );
 
-    // Update cart tracking with PayPal order ID
-    const cart = cartReconciliation.find((c) => c.cartId === paypalCartId);
-    if (cart) {
-      cart.metadata.paypalOrderId = paypalResponse.data.id;
-      cart.metadata.paypalOrderStatus = paypalResponse.data.status;
-    }
-
     res.json({
       ...paypalResponse.data,
       cartId: paypalCartId,
@@ -700,19 +378,6 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
     );
 
     console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
-
-    // Find and update cart reconciliation for PayPal
-    const cart = cartReconciliation.find(
-      (c) => c.metadata.paypalOrderId === orderId,
-    );
-    if (cart) {
-      trackCartConfirmation(cart.cartId, "paypal.order.captured", {
-        paypalOrderId: orderId,
-        status: response.data.status,
-        payer: response.data.payer,
-        purchase_units: response.data.purchase_units,
-      });
-    }
 
     res.json({
       success: true,
@@ -903,16 +568,6 @@ app.post("/api/stripe/create-session", async (req, res) => {
     // Generate cart ID for this session
     const sessionCartId = uuidv4();
 
-    // Track cart creation
-    trackCartCreation(sessionCartId, "stripe-checkout", {
-      items: items.map((item) => ({
-        priceId: item.id,
-        quantity: item.quantity,
-      })),
-      email: email || "not provided",
-      totalItems: items.length,
-    });
-
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -1067,18 +722,10 @@ app.post("/api/stripe/verify-payment", async (req, res) => {
 // ROOT & ERROR HANDLING
 // ========================
 app.get("/", (req, res) => {
-  const reconciliationStats = {
-    total: cartReconciliation.length,
-    confirmed: cartReconciliation.filter((c) => c.status === "confirmed")
-      .length,
-    pending: cartReconciliation.filter((c) => c.status === "created").length,
-  };
-
   res.json({
     message: "Stripe & PayPal Integration API",
     version: "2.0",
     webhook: config.STRIPE_WEBHOOK_SECRET ? "active" : "not configured",
-    reconciliation: reconciliationStats,
     endpoints: {
       stripe: {
         products: "GET /api/stripe/products",
