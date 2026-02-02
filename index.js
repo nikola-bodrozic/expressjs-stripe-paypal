@@ -194,7 +194,7 @@ app.post(
         // Check if metadata exists
         if (session.metadata) {
           console.log("Metadata Details:");
-          console.log("  - cartId:", session.metadata.cartId || "N/A");
+          console.log("  /api/stripe/webhook::checkout.session.completed - cartId:", session.metadata.cartId || "N/A");
           console.log("  - priceIds:", session.metadata.priceIds || "N/A");
         }
         console.log("✅ checkout.session.completed processed");
@@ -203,6 +203,7 @@ app.post(
         console.log("💰 payment_intent.succeeded event received");
         const paymentIntent = event.data.object;
         console.log("- Payment Intent ID:", paymentIntent.id);
+        console.log(`/api/stripe/webhook::payment_intent.succeeded cart id: ${paymentIntent.metadata.cartId}`);
         console.log(
           "- Amount:",
           paymentIntent.amount
@@ -609,10 +610,7 @@ app.post("/api/stripe/create-session", async (req, res) => {
     });
 
     console.log(`Stripe session created: ${session.id}`);
-    console.log(
-      `ℹ️ Webhook will be sent to: ${config.DOMAIN}/api/stripe/webhook when payment is complete`,
-    );
-    console.log(`📦 Cart ${sessionCartId} tracking initiated`);
+    console.log(` /api/stripe/create-session  Cart ${sessionCartId} created and added to metadata`);
 
     res.json({
       success: true,
@@ -642,7 +640,7 @@ app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["line_items.data.price.product", "payment_intent"],
     });
-
+    console.log(`cart id in /api/stripe/sessions/:sessionId ${session.metadata.cartId}`);
     res.json({
       success: true,
       data: {
