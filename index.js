@@ -367,6 +367,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
       },
     );
 
+    console.log(JSON.stringify(paypalResponse));
     console.log(
       `PayPal ${config.PAYPAL_ENV} order created: ${paypalResponse.data.id}`,
     );
@@ -402,7 +403,7 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
         },
       },
     );
-
+    console.log(JSON.stringify(response.data));
     console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
 
     res.json({
