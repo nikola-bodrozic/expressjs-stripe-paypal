@@ -389,7 +389,7 @@ app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async
       console.log("- Session ID:", session.id);
       console.log("- Payment Status:", session.payment_status);
       console.log("- Customer Email:", session.customer_email);
-      console.log("- Amount Total:", session.amount_total ? `$${(session.amount_total / 100).toFixed(2)}` : "N/A");
+      console.log("- Amount Total:", session.amount_total ? `${session.currency?.toUpperCase()} ${(session.amount_total / 100).toFixed(2)}` : "N/A");
       console.log("- Currency:", session.currency?.toUpperCase());
       console.log("- Metadata:", session.metadata);
       
@@ -425,7 +425,7 @@ app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async
       console.log("💰 payment_intent.succeeded event received");
       const paymentIntent = event.data.object;
       console.log("- Payment Intent ID:", paymentIntent.id);
-      console.log("- Amount:", paymentIntent.amount ? `$${(paymentIntent.amount / 100).toFixed(2)}` : "N/A");
+      console.log("- Amount:", paymentIntent.amount ? `${session.currency?.toUpperCase()} ${(paymentIntent.amount / 100).toFixed(2)}` : "N/A");
       console.log("- Customer:", paymentIntent.customer || "N/A");
       console.log("- Metadata:", paymentIntent.metadata);
       
