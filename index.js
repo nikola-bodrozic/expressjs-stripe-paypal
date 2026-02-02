@@ -403,7 +403,7 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
         },
       },
     );
-    console.log("/api/paypal/capture-order/:orderId PayPal cart id: ",JSON.stringify(response.data.purchase_units.reference_id));
+    console.log("/api/paypal/capture-order/:orderId PayPal cart id: ",JSON.stringify(response.data.purchase_units[0]?.reference_id));
     console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
 
     res.json({
