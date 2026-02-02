@@ -46,9 +46,10 @@ let paypalTokenCache = {
   token: null,
   expiresAt: 0,
 };
+let tokenRefreshLock = null;
 
-// Get PayPal access token with caching
 async function getPayPalAccessToken() {
+  // Return cached token if valid
   if (
     paypalTokenCache.token &&
     Date.now() < paypalTokenCache.expiresAt - 60000
@@ -56,42 +57,64 @@ async function getPayPalAccessToken() {
     return paypalTokenCache.token;
   }
 
-  try {
-    const auth = Buffer.from(
-      `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`,
-    ).toString("base64");
-
-    const response = await axios.post(
-      `${PAYPAL_API_BASE}/v1/oauth2/token`,
-      "grant_type=client_credentials",
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        timeout: 10000,
-      },
-    );
-
-    // Cache the token
-    paypalTokenCache = {
-      token: response.data.access_token,
-      expiresAt: Date.now() + response.data.expires_in * 1000,
-    };
-
-    console.log(
-      `PayPal ${config.PAYPAL_ENV.toUpperCase()} token obtained and cached`,
-    );
-    return response.data.access_token;
-  } catch (error) {
-    console.error(
-      `PayPal ${config.PAYPAL_ENV.toUpperCase()} Access Token Error:`,
-      error.response?.data || error.message,
-    );
-    throw new Error(
-      `Failed to get PayPal ${config.PAYPAL_ENV} access token: ${error.response?.data?.error_description || error.message}`,
-    );
+  // If a refresh is already in progress, wait for it
+  if (tokenRefreshLock) {
+    console.log("⏳ Another request is refreshing token, waiting...");
+    return await tokenRefreshLock;
   }
+
+  // Start a new refresh
+  console.log("🔄 Starting PayPal token refresh");
+  tokenRefreshLock = (async () => {
+    try {
+      const auth = Buffer.from(
+        `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`,
+      ).toString("base64");
+
+      const response = await axios.post(
+        `${PAYPAL_API_BASE}/v1/oauth2/token`,
+        "grant_type=client_credentials",
+        {
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          timeout: 10000,
+        },
+      );
+
+      // Update cache
+      paypalTokenCache = {
+        token: response.data.access_token,
+        expiresAt: Date.now() + response.data.expires_in * 1000,
+      };
+
+      console.log(
+        `✅ PayPal ${config.PAYPAL_ENV.toUpperCase()} token refreshed`,
+      );
+
+      return paypalTokenCache.token;
+    } catch (error) {
+      console.error(
+        `PayPal ${config.PAYPAL_ENV.toUpperCase()} Access Token Error:`,
+        error.response?.data || error.message,
+      );
+
+      // Clear cache on auth errors
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        paypalTokenCache = { token: null, expiresAt: 0 };
+      }
+
+      throw new Error(
+        `Failed to get PayPal ${config.PAYPAL_ENV} access token: ${error.response?.data?.error_description || error.message}`,
+      );
+    } finally {
+      // Always clear the lock
+      tokenRefreshLock = null;
+    }
+  })();
+
+  return tokenRefreshLock;
 }
 
 // CORS configuration
@@ -136,8 +159,6 @@ app.use(cors(corsOptions));
 
 // Handle preflight requests
 app.options("*", cors(corsOptions));
-
-
 
 // ========================
 // STRIPE WEBHOOK ENDPOINT
@@ -194,16 +215,20 @@ app.post(
         // Check if metadata exists
         if (session.metadata) {
           console.log("Metadata Details:");
-          console.log("  /api/stripe/webhook::checkout.session.completed - cartId:", session.metadata.cartId || "N/A");
+          console.log(
+            "  /api/stripe/webhook::checkout.session.completed - cartId:",
+            session.metadata.cartId || "N/A",
+          );
           console.log("  - priceIds:", session.metadata.priceIds || "N/A");
         }
         console.log("✅ checkout.session.completed processed");
-      }
-      else if (event.type === "payment_intent.succeeded") {
+      } else if (event.type === "payment_intent.succeeded") {
         console.log("💰 payment_intent.succeeded event received");
         const paymentIntent = event.data.object;
         console.log("- Payment Intent ID:", paymentIntent.id);
-        console.log(`/api/stripe/webhook::payment_intent.succeeded cart id: ${paymentIntent.metadata.cartId}`);
+        console.log(
+          `/api/stripe/webhook::payment_intent.succeeded cart id: ${paymentIntent.metadata.cartId}`,
+        );
         console.log(
           "- Amount:",
           paymentIntent.amount
@@ -238,14 +263,14 @@ app.post(
 // ========================
 // Create PayPal order using Stripe prices
 app.post("/api/paypal/create-order", async (req, res) => {
-  const paypalItems=[];
   try {
+    const paypalItems = [];
     const { items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items array is required" });
     }
-    
+
     let totalCents = 0;
     let currency = null;
 
@@ -610,7 +635,9 @@ app.post("/api/stripe/create-session", async (req, res) => {
     });
 
     console.log(`Stripe session created: ${session.id}`);
-    console.log(` /api/stripe/create-session  Cart ${sessionCartId} created and added to metadata`);
+    console.log(
+      ` /api/stripe/create-session  Cart ${sessionCartId} created and added to metadata`,
+    );
 
     res.json({
       success: true,
@@ -640,7 +667,9 @@ app.get("/api/stripe/sessions/:sessionId", async (req, res) => {
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["line_items.data.price.product", "payment_intent"],
     });
-    console.log(`cart id in /api/stripe/sessions/:sessionId ${session.metadata.cartId}`);
+    console.log(
+      `cart id in /api/stripe/sessions/:sessionId ${session.metadata.cartId}`,
+    );
     res.json({
       success: true,
       data: {
@@ -737,16 +766,10 @@ app.get("/", (req, res) => {
         createOrder: "POST /api/paypal/create-order",
         captureOrder: "POST /api/paypal/capture-order/:orderId",
       },
-      reconciliation: {
-        all: "GET /api/reconciliation",
-        stats: "GET /api/reconciliation/stats",
-        byCartId: "GET /api/reconciliation/:cartId",
-      },
       health: "GET /api/health",
     },
   });
 });
-
 
 // ========================
 // HEALTH & INFO ENDPOINTS
@@ -754,7 +777,7 @@ app.get("/", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
