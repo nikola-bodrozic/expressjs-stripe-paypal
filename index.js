@@ -1,3 +1,4 @@
+/* eslint-disable curly */
 // index.js - Combined Stripe + PayPal (with Webhook and Reconciliation)
 const express = require("express");
 const cors = require("cors");
@@ -454,7 +455,7 @@ app.post(
         console.log(
           "- Amount:",
           paymentIntent.amount
-            ? `${session.currency?.toUpperCase()} ${(paymentIntent.amount / 100).toFixed(2)}`
+            ? `${paymentIntent.currency.toUpperCase()} ${(paymentIntent.amount / 100).toFixed(2)}`
             : "N/A",
         );
         console.log("- Customer:", paymentIntent.customer || "N/A");
@@ -542,14 +543,14 @@ app.get("/api/health", (req, res) => {
 // ========================
 // Create PayPal order using Stripe prices
 app.post("/api/paypal/create-order", async (req, res) => {
+  const paypalItems=[];
   try {
     const { items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items array is required" });
     }
-
-    let paypalItems = [];
+    
     let totalCents = 0;
     let currency = null;
 
