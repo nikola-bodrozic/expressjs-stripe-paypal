@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: stripe-paypal-api
-    env: node
-    plan: free
-    buildCommand: "yarn install --production"
-    startCommand: "node index.js"
-
