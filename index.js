@@ -106,8 +106,6 @@ function timeDifference(start, end) {
   return `${(diffMs / 3600000).toFixed(2)}h`;
 }
 
-const cartId = uuidv4();
-
 // Validate Stripe key
 if (!config.STRIPE_KEY) {
   console.error("❌ ERROR: STRIPE_KEY is not set in environment variables");
@@ -174,90 +172,6 @@ async function getPayPalAccessToken() {
   }
 }
 
-// Helper function to detect country from IP
-async function detectCountryFromIP(ip) {
-  try {
-    const response = await axios.get(`https://ipapi.co/${ip}/country_code/`, {
-      timeout: 5000,
-    });
-    return response.data.trim();
-  } catch (error) {
-    console.error("Error detecting country:", error.message);
-    return "";
-  }
-}
-
-// Helper function to get client IP
-function getClientIp(req) {
-  const xForwardedFor = req.headers["x-forwarded-for"];
-  if (xForwardedFor) {
-    return xForwardedFor.split(",")[0].trim();
-  }
-  return req.ip || req.connection.remoteAddress;
-}
-
-// Helper function to get shipping options based on country
-function getShippingOptionsForCountry(detectedCountry, shippingRateIds) {
-  // European countries
-  const europeanCountries = [
-    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
-    "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
-  ];
-
-  let sortedShippingOptions = [];
-
-  if (detectedCountry === "GB") {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["AU"] },
-      { shipping_rate: shippingRateIds["CA"] },
-    ];
-  } else if (europeanCountries.includes(detectedCountry)) {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["AU"] },
-      { shipping_rate: shippingRateIds["CA"] },
-    ];
-  } else if (detectedCountry === "US") {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["AU"] },
-      { shipping_rate: shippingRateIds["CA"] },
-    ];
-  } else if (detectedCountry === "AU") {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["AU"] },
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["CA"] },
-    ];
-  } else if (detectedCountry === "CA") {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["CA"] },
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["AU"] },
-    ];
-  } else {
-    sortedShippingOptions = [
-      { shipping_rate: shippingRateIds["GB"] },
-      { shipping_rate: shippingRateIds["EU"] },
-      { shipping_rate: shippingRateIds["US"] },
-      { shipping_rate: shippingRateIds["AU"] },
-      { shipping_rate: shippingRateIds["CA"] },
-    ];
-  }
-
-  return sortedShippingOptions;
-}
 
 // CORS configuration
 const allowedOrigins = [
@@ -302,9 +216,6 @@ app.use(cors(corsOptions));
 // Handle preflight requests
 app.options("*", cors(corsOptions));
 
-// ========================
-// RECONCILIATION ENDPOINTS
-// ========================
 // ========================
 // RECONCILIATION ENDPOINTS
 // ========================
@@ -423,7 +334,6 @@ app.get("/api/reconciliation/info", (req, res) => {
         metadata: {
           totalItems: cart.metadata?.totalItems || 0,
           email: cart.metadata?.email || 'not provided',
-          detectedCountry: cart.metadata?.detectedCountry || 'unknown'
         },
         eventsCount: cart.events?.length || 0
       }))
@@ -488,7 +398,6 @@ app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async
         console.log("Metadata Details:");
         console.log("  - cartId:", session.metadata.cartId || "N/A");
         console.log("  - priceIds:", session.metadata.priceIds || "N/A");
-        console.log("  - detectedCountry:", session.metadata.detectedCountry || "N/A");
         
         // Track cart confirmation
         if (session.metadata.cartId) {
@@ -642,6 +551,7 @@ app.post("/api/paypal/create-order", async (req, res) => {
             { auth: { username: config.STRIPE_KEY, password: "" } },
           );
           title = product.name || "Product";
+        // eslint-disable-next-line no-unused-vars
         } catch (e) {
           // Keep default title
         }
@@ -911,18 +821,6 @@ app.post("/api/stripe/create-session", async (req, res) => {
       CA: config.CA,
     };
 
-    // Detect country from IP
-    const ip = getClientIp(req);
-    let detectedCountry = "";
-    try {
-      detectedCountry = await detectCountryFromIP(ip);
-    } catch (error) {
-      console.warn("Could not detect country:", error.message);
-    }
-
-    // Get shipping options
-    const sortedShippingOptions = getShippingOptionsForCountry(detectedCountry, shippingRateIds);
-
     // European countries for allowed shipping
     const europeanCountries = [
       "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU",
@@ -940,13 +838,12 @@ app.post("/api/stripe/create-session", async (req, res) => {
         quantity: item.quantity
       })),
       email: email || 'not provided',
-      detectedCountry: detectedCountry || 'unknown',
       totalItems: items.length
     });
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card", "paypal"],
+      payment_method_types: ["card"],
       line_items: line_items,
       mode: "payment",
 
@@ -963,7 +860,9 @@ app.post("/api/stripe/create-session", async (req, res) => {
         allowed_countries: allowedCountries,
       },
 
-      shipping_options: sortedShippingOptions,
+      shipping_options: Object.values(shippingRateIds)
+        .filter(Boolean) // remove undefined
+        .map(id => ({ shipping_rate: id })),
 
       billing_address_collection: "required",
       allow_promotion_codes: true,
@@ -972,7 +871,6 @@ app.post("/api/stripe/create-session", async (req, res) => {
       metadata: {
         cartId: sessionCartId,
         priceIds: priceIds.join(","),
-        detectedCountry: detectedCountry || "unknown",
       },
 
       // ✅ THIS IS FOR payment_intent.* webhooks (IMPORTANT)
@@ -1138,6 +1036,7 @@ app.use((req, res) => {
 });
 
 // Error handling middleware
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.stack);
   res.status(500).json({

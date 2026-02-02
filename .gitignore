@@ -1,3 +1,5 @@
 node_modules
 p.json
 .env
+vendor/
+composer.lock

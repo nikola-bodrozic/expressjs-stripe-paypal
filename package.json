@@ -2,11 +2,11 @@
   "name": "express-api",
   "version": "1.0.0",
   "main": "index.js",
-"scripts": {
-  "start": "node index.js",
-  "dev": "nodemon index.js",
-  "test": "jest"
-},
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
+    "eslint": "^9.39.2",
     "jest": "^30.0.4",
     "nock": "^14.0.6",
     "nodemon": "^3.1.7",
