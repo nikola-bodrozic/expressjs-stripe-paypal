@@ -157,6 +157,23 @@ const corsOptions = {
   maxAge: 3600
 };
 
+
+
+app.use((req, res, next) => {
+  console.log('\n' + '='.repeat(70));
+  console.log('🌐 INCOMING REQUEST DETAILS:');
+  console.log('='.repeat(70));
+  console.log(`IP: ${req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress || 'Unknown'}`);
+  console.log(`Method: ${req.method}`);
+  console.log(`URL: ${req.url}`);
+  console.log(`Origin: ${req.headers.origin || '(No Origin header)'}`);
+  console.log(`User-Agent: ${req.headers['user-agent']?.substring(0, 80) || 'No User-Agent'}${req.headers['user-agent']?.length > 80 ? '...' : ''}`);
+  console.log(`Referer: ${req.headers.referer || '(No Referer)'}`);
+  console.log('='.repeat(70) + '\n');
+  next();
+});
+
+
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(cors(corsOptions));
