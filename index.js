@@ -1,4 +1,3 @@
-/* eslint-disable curly */
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -64,7 +63,7 @@ async function getPayPalAccessToken() {
   }
 
   // Start a new refresh
-  console.log("🔄 Starting PayPal token refresh");
+  console.log("Starting PayPal token refresh");
   tokenRefreshLock = (async () => {
     try {
       const auth = Buffer.from(
@@ -122,8 +121,6 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost",
   "http://127.0.0.1",
-  "http://localhost:80",
-  "http://127.0.0.1:80",
 ];
 
 const corsOptions = {
@@ -140,19 +137,6 @@ const corsOptions = {
   maxAge: 3600,
 };
 
-// IMPORTANT: Express.json() must be configured BEFORE the webhook endpoint
-// For webhooks, we need the raw body for signature verification
-// We'll configure it conditionally for the webhook endpoint
-
-// Parse JSON for all routes except webhook
-app.use((req, res, next) => {
-  if (req.originalUrl === "/api/stripe/webhook") {
-    next(); // Skip JSON parsing for webhook
-  } else {
-    express.json()(req, res, next);
-  }
-});
-
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(cors(corsOptions));
@@ -167,7 +151,7 @@ app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    console.log("🔔 Stripe Webhook Received!");
+    console.log("ߔ Stripe Webhook Received!");
 
     const webhookSecret = config.STRIPE_WEBHOOK_SECRET;
 
@@ -185,7 +169,7 @@ app.post(
       console.log("✅ Webhook signature verified successfully");
 
       // Log the full event
-      console.log("📋 Webhook Event Details:");
+      console.log("ߓ Webhook Event Details:");
       console.log("- Event ID:", event.id || "N/A");
       console.log("- Event Type:", event.type || "N/A");
       console.log(
@@ -196,7 +180,7 @@ app.post(
 
       // Handle specific event types
       if (event.type === "checkout.session.completed") {
-        console.log("🎉 checkout.session.completed event received!");
+        console.log("ߎ checkout.session.completed event received!");
 
         const session = event.data.object;
         console.log("Session Details:");
@@ -223,7 +207,7 @@ app.post(
         }
         console.log("✅ checkout.session.completed processed");
       } else if (event.type === "payment_intent.succeeded") {
-        console.log("💰 payment_intent.succeeded event received");
+        console.log("ߒ payment_intent.succeeded event received");
         const paymentIntent = event.data.object;
         console.log("- Payment Intent ID:", paymentIntent.id);
         console.log(
@@ -257,6 +241,8 @@ app.post(
     }
   },
 );
+
+app.use(express.json());
 
 // ========================
 // PAYPAL ENDPOINTS
@@ -307,8 +293,9 @@ app.post("/api/paypal/create-order", async (req, res) => {
 
       // Check currency consistency
       const itemCurrency = price.currency.toUpperCase();
-      if (!currency) currency = itemCurrency;
-      else if (currency !== itemCurrency) {
+      if (!currency) {
+        currency = itemCurrency;
+      } else if (currency !== itemCurrency) {
         return res
           .status(400)
           .json({ error: "Mixed currencies are not allowed" });
@@ -403,7 +390,10 @@ app.post("/api/paypal/capture-order/:orderId", async (req, res) => {
         },
       },
     );
-    console.log("/api/paypal/capture-order/:orderId PayPal cart id: ",JSON.stringify(response.data.purchase_units[0]?.reference_id));
+    console.log(
+      "/api/paypal/capture-order/:orderId PayPal cart id: ",
+      JSON.stringify(response.data.purchase_units[0]?.reference_id),
+    );
     console.log(`PayPal ${config.PAYPAL_ENV} order captured: ${orderId}`);
 
     res.json({
@@ -812,7 +802,7 @@ app.listen(port, "0.0.0.0", () => {
     `✅ Success pages: ${config.DOMAIN}/success-s.php (Stripe) & ${config.DOMAIN}/success-pp.php (PayPal)`,
   );
   console.log(
-    `🔔 Stripe Webhook Endpoint: ${config.API_BASE_URL}/api/stripe/webhook`,
+    `ߔ Stripe Webhook Endpoint: ${config.API_BASE_URL}/api/stripe/webhook`,
   );
 });
 
