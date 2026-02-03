@@ -52,7 +52,12 @@ if ($stripeSessionId) {
         CURLOPT_URL => $apiUrl,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 10,
-        CURLOPT_HTTPHEADER => ['Accept: application/json'],
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'User-Agent: PHP-cURL/1.0 (Success-Page; +https://' . ($_SERVER['HTTP_HOST'] ?? 'test.nikolabodr.com') . ')',
+            'X-Request-Source: success-s.php',
+            'X-Store: ' . $storeName
+        ],
     ]);
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -60,16 +65,7 @@ if ($stripeSessionId) {
 
     if ($response && $httpCode === 200) {
         $decoded = json_decode($response, true);
-
-        // ====== DEBUG ======
-        // echo '<pre>API Response: ';
-        // print_r($decoded);
-        // echo '</pre>';
-        // Uncomment the next line if you want to stop execution for debugging
-        // die();
-
         $s = $decoded['data'] ?? [];
-
         $paymentStatus = $s['paymentStatus'] ?? 'processing';
         $orderAmount = isset($s['amountTotal']) ? $s['amountTotal']/100 : null;
         $currency = strtoupper($s['currency'] ?? 'GBP');
@@ -102,7 +98,11 @@ if ($stripeSessionId) {
                 CURLOPT_TIMEOUT => 10,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => json_encode(['sessionId' => $stripeSessionId]),
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'User-Agent: PHP-cURL/1.0 (Success-Page; ' . ($_SERVER['HTTP_HOST'] ?? 'test.nikolabodr.com') . ')',
+                    'X-Request-Source: success-s.php'
+                ],
             ]);
             $verifyResp = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -117,6 +117,10 @@ if ($stripeSessionId) {
         }
     } else {
         echo '<p style="color:red;">Failed to fetch Stripe session.</p>';
+        // Debug info
+        if ($response === false) {
+            echo '<p style="color:orange;">cURL Error: ' . curl_error($ch) . '</p>';
+        }
     }
 }
 

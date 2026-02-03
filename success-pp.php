@@ -30,6 +30,39 @@ $transactionId = null;
 $cartId = null;
 
 // ========================
+// HELPER FUNCTIONS
+// ========================
+function getCurrentUrl() {
+    $protocol = 'https';
+    
+    // Check HTTPS
+    if (isset($_SERVER['HTTPS'])) {
+        $protocol = ($_SERVER['HTTPS'] === 'on' || $_SERVER['HTTPS'] === '1') ? 'https' : 'http';
+    } 
+    // Check REQUEST_SCHEME
+    elseif (isset($_SERVER['REQUEST_SCHEME'])) {
+        $protocol = $_SERVER['REQUEST_SCHEME'];
+    } 
+    // Check SERVER_PORT
+    elseif (isset($_SERVER['SERVER_PORT'])) {
+        $protocol = ($_SERVER['SERVER_PORT'] == 443) ? 'https' : 'http';
+    }
+    
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    return $protocol . '://' . $host;
+}
+
+function getCurlUserAgent() {
+    $url = getCurrentUrl();
+    return 'PHP-cURL/1.0 (PayPal-Success-Page; ' . $url . ')';
+}
+
+function formatCurrency($amount, $currency) {
+    if (!$amount) return 'N/A';
+    return strtoupper($currency) . ' ' . number_format($amount, 2);
+}
+
+// ========================
 // HANDLE PAYPAL PAYMENT
 // ========================
 if ($paypalToken) {
@@ -37,6 +70,16 @@ if ($paypalToken) {
 
     try {
         $apiBaseUrl = $_ENV['API_BASE_URL'] ?? getenv('API_BASE_URL') ?? 'http://localhost:3000';
+        $apiBaseUrl = rtrim($apiBaseUrl, '/');
+        // Prepare headers with User-Agent
+        $headers = [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'User-Agent: ' . getCurlUserAgent(),
+            'X-Request-Source: success-pp.php',
+            'X-Payment-Method: PayPal',
+            'X-Store: ' . $storeName
+        ];
 
         $ch = curl_init();
         curl_setopt_array($ch, [
@@ -44,14 +87,17 @@ if ($paypalToken) {
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
             CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Accept: application/json'
-            ],
+            CURLOPT_HTTPHEADER => $headers,
         ]);
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        
+        // Debug logging (optional)
+        if ($response === false) {
+            error_log('PayPal capture cURL error: ' . curl_error($ch));
+        }
+        
         curl_close($ch);
 
         if ($response && $httpCode === 200) {
@@ -84,12 +130,15 @@ if ($paypalToken) {
                 }
             } else {
                 $paymentStatus = 'failed';
+                error_log('PayPal capture failed: ' . json_encode($captureData));
             }
         } else {
             $paymentStatus = 'failed';
+            error_log('PayPal capture HTTP error: ' . $httpCode . ' - ' . $response);
         }
     } catch (Throwable $e) {
         $paymentStatus = 'error';
+        error_log('PayPal capture exception: ' . $e->getMessage());
     }
 } else {
     $paymentStatus = 'missing';
@@ -103,10 +152,19 @@ $isProcessing = in_array($paymentStatus, ['processing', 'pending', 'created']);
 $isFailed = in_array($paymentStatus, ['failed', 'canceled', 'expired', 'error']);
 $isMissing = $paymentStatus === 'missing';
 
-// Helpers
-function formatCurrency($amount, $currency) {
-    if (!$amount) return 'N/A';
-    return strtoupper($currency) . ' ' . number_format($amount, 2);
+// Set colors based on status
+if ($isSuccess) {
+    $color = '#4CAF50'; // Green
+    $paymentInfo = ['color' => '#4CAF50', 'icon' => '✓'];
+} elseif ($isProcessing) {
+    $color = '#FF9800'; // Orange
+    $paymentInfo = ['color' => '#FF9800', 'icon' => '⏳'];
+} elseif ($isFailed) {
+    $color = '#F44336'; // Red
+    $paymentInfo = ['color' => '#F44336', 'icon' => '✗'];
+} else {
+    $color = '#2196F3'; // Blue
+    $paymentInfo = ['color' => '#2196F3', 'icon' => '?'];
 }
 ?>
 <!DOCTYPE html>
@@ -114,7 +172,7 @@ function formatCurrency($amount, $currency) {
 <head>
     <meta charset="UTF-8">
     <title>PayPal Payment - <?php echo htmlspecialchars($storeName); ?></title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -348,113 +406,147 @@ function formatCurrency($amount, $currency) {
     </style>
 </head>
 <body>
+    <div class="container">
+        <div class="status-bar"></div>
+        <div class="content">
+            <div class="payment-method">
+                <i class="fab fa-paypal"></i>
+                <span>PayPal</span>
+            </div>
+            
+            <div class="status-icon">
+                <?php 
+                if ($isSuccess) echo '<i class="fas fa-check-circle"></i>';
+                elseif ($isProcessing) echo '<i class="fas fa-clock"></i>';
+                elseif ($isFailed) echo '<i class="fas fa-times-circle"></i>';
+                else echo '<i class="fas fa-question-circle"></i>';
+                ?>
+            </div>
+            
+            <h1>
+                <?php
+                if ($isSuccess) echo 'Payment Successful!';
+                elseif ($isProcessing) echo 'Payment Processing';
+                elseif ($isFailed) echo 'Payment Failed';
+                elseif ($isMissing) echo 'Missing PayPal Token';
+                else echo 'Payment Status';
+                ?>
+            </h1>
+            
+            <p class="message">
+                <?php
+                if ($isSuccess) echo 'Thank you! Your PayPal payment was completed successfully.';
+                elseif ($isProcessing) echo 'Your PayPal payment is still being processed. This page will refresh automatically.';
+                elseif ($isFailed) echo 'There was a problem with your PayPal payment. Please try again or contact support.';
+                elseif ($isMissing) echo 'No PayPal token was provided. Please return to the checkout page.';
+                else echo 'We are checking your payment status.';
+                ?>
+            </p>
+            
+            <div class="status-badge">
+                <?php echo strtoupper($paymentStatus); ?>
+            </div>
+            
+            <div class="details-card">
+                <div class="detail-item">
+                    <span class="detail-label">PayPal Order ID:</span>
+                    <span class="detail-value">
+                        <span class="order-id"><?php echo htmlspecialchars($orderId); ?></span>
+                    </span>
+                </div>
+                
+                <?php if ($cartId): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Cart ID:</span>
+                    <span class="detail-value"><?php echo htmlspecialchars($cartId); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($payerId): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Payer ID:</span>
+                    <span class="detail-value"><?php echo htmlspecialchars($payerId); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($transactionId): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Transaction ID:</span>
+                    <span class="detail-value"><?php echo htmlspecialchars($transactionId); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($orderAmount): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Amount Paid:</span>
+                    <span class="detail-value amount"><?php echo formatCurrency($orderAmount, $currency); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($customerEmail): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Customer Email:</span>
+                    <span class="detail-value"><?php echo htmlspecialchars($customerEmail); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($customerName): ?>
+                <div class="detail-item">
+                    <span class="detail-label">Customer Name:</span>
+                    <span class="detail-value"><?php echo htmlspecialchars(trim($customerName)); ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <div class="detail-item">
+                    <span class="detail-label">Date:</span>
+                    <span class="detail-value"><?php echo date('Y-m-d H:i:s'); ?></span>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <?php if ($isSuccess || $isProcessing): ?>
+                <a href="/" class="btn btn-primary">
+                    <i class="fas fa-shopping-cart"></i>
+                    Continue Shopping
+                </a>
+                <?php endif; ?>
+                
+                <?php if ($isFailed || $isMissing): ?>
+                <a href="/" class="btn btn-primary">
+                    <i class="fas fa-arrow-left"></i>
+                    Return to Checkout
+                </a>
+                <?php endif; ?>
+                
+                <a href="mailto:<?php echo htmlspecialchars($storeEmail); ?>" class="btn btn-secondary">
+                    <i class="fas fa-envelope"></i>
+                    Contact Support
+                </a>
+            </div>
+            
+            <div class="footer">
+                <p>If you have any questions about your order, please don't hesitate to contact us.</p>
+                <div class="contact-info">
+                    <div class="contact-item">
+                        <i class="fas fa-envelope"></i>
+                        <span><?php echo htmlspecialchars($storeEmail); ?></span>
+                    </div>
+                    <div class="contact-item">
+                        <i class="fas fa-phone"></i>
+                        <span><?php echo htmlspecialchars($storePhone); ?></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-<h1>
-<?php
-if ($isSuccess) echo 'Payment Successful';
-elseif ($isProcessing) echo 'Payment Processing';
-elseif ($isFailed) echo 'Payment Failed';
-elseif ($isMissing) echo 'Missing PayPal Token';
-else echo 'Payment Status';
-?>
-</h1>
-
-<p>
-<?php
-if ($isSuccess) echo 'Thank you! Your PayPal payment was completed successfully.';
-elseif ($isProcessing) echo 'Your PayPal payment is still being processed.';
-elseif ($isFailed) echo 'There was a problem with your PayPal payment.';
-elseif ($isMissing) echo 'No PayPal token was provided.';
-else echo 'We are checking your payment status.';
-?>
-</p>
-
-<hr>
-
-<h2>Order Details</h2>
-
-<ul>
-    <li><strong>Payment Method:</strong> PayPal</li>
-
-    <li>
-        <strong>PayPal Order ID:</strong><br>
-        <?php echo htmlspecialchars($orderId); ?>
-    </li>
-
-    <?php if ($cartId): ?>
-    <li>
-        <strong>Cart ID (Your Order Reference):</strong><br>
-        <?php echo htmlspecialchars($cartId); ?>
-    </li>
+    <?php if ($isProcessing): ?>
+    <script>
+        setTimeout(function () {
+            location.reload();
+        }, 10000);
+    </script>
     <?php endif; ?>
-
-    <?php if ($payerId): ?>
-    <li>
-        <strong>Payer ID:</strong><br>
-        <?php echo htmlspecialchars($payerId); ?>
-    </li>
-    <?php endif; ?>
-
-    <?php if ($transactionId): ?>
-    <li>
-        <strong>Transaction ID:</strong><br>
-        <?php echo htmlspecialchars($transactionId); ?>
-    </li>
-    <?php endif; ?>
-
-    <?php if ($orderAmount): ?>
-    <li>
-        <strong>Amount Paid:</strong><br>
-        <?php echo formatCurrency($orderAmount, $currency); ?>
-    </li>
-    <?php endif; ?>
-
-    <?php if ($customerEmail): ?>
-    <li>
-        <strong>Customer Email:</strong><br>
-        <?php echo htmlspecialchars($customerEmail); ?>
-    </li>
-    <?php endif; ?>
-
-    <?php if ($customerName): ?>
-    <li>
-        <strong>Customer Name:</strong><br>
-        <?php echo htmlspecialchars(trim($customerName)); ?>
-    </li>
-    <?php endif; ?>
-
-    <li>
-        <strong>Status:</strong><br>
-        <?php echo strtoupper(htmlspecialchars($paymentStatus)); ?>
-    </li>
-
-    <li>
-        <strong>Date:</strong><br>
-        <?php echo date('Y-m-d H:i:s'); ?>
-    </li>
-</ul>
-
-<hr>
-
-<p>
-If you have any questions, contact us at
-<a href="mailto:<?php echo htmlspecialchars($storeEmail); ?>">
-<?php echo htmlspecialchars($storeEmail); ?>
-</a>
-or call <?php echo htmlspecialchars($storePhone); ?>.
-</p>
-
-<p>
-<a href="/">Continue shopping</a>
-</p>
-
-<?php if ($isProcessing): ?>
-<script>
-    setTimeout(function () {
-        location.reload();
-    }, 10000);
-</script>
-<?php endif; ?>
 
 </body>
 </html>
