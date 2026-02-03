@@ -115,7 +115,7 @@ async function getPayPalAccessToken() {
 
   return tokenRefreshLock;
 }
-console.log("==== domain from env variable =====",config.DOMAIN);
+console.log("==== domain from env variable =====",config.DOMAIN,"=====");
 // CORS configuration
 const allowedOrigins = [
   "http://localhost:5173",
@@ -126,16 +126,35 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log("⚠️ CORS blocked origin:", origin);
-      callback(null, true); // Allow for development
+    console.log('\n' + '='.repeat(50));
+    console.log('CORS ORIGIN CHECK');
+    console.log('='.repeat(50));
+    console.log(`Received origin: "${origin}"`);
+    console.log(`Expected origin: "https://test.nikolabodr.com"`);
+    console.log(`Exact match: ${origin === 'https://test.nikolabodr.com' ? 'YES' : 'NO'}`);
+    
+    if (!origin) {
+      console.log('No Origin header: YES (allowing)');
+      console.log('='.repeat(50) + '\n');
+      return callback(null, true);
     }
+    
+    if (origin === 'https://test.nikolabodr.com') {
+      console.log('Allowed: YES');
+      console.log('='.repeat(50) + '\n');
+      return callback(null, true);
+    }
+    
+    console.log('Allowed: NO (but allowing for debugging)');
+    console.log(`Difference: Check protocol (http/https), www prefix, or trailing slash`);
+    console.log('='.repeat(50) + '\n');
+    
+    // For debugging, allow it anyway
+    callback(null, true);
   },
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
-  maxAge: 3600,
+  maxAge: 3600
 };
 
 app.use(express.urlencoded({ extended: true }));
