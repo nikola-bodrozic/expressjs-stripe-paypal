@@ -115,7 +115,7 @@ async function getPayPalAccessToken() {
 
   return tokenRefreshLock;
 }
-
+console.log(config.DOMAIN);
 // CORS configuration
 const allowedOrigins = [
   "http://localhost:5173",
